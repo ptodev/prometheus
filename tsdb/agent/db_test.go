@@ -504,6 +504,27 @@ func TestPartialTruncateWAL(t *testing.T) {
 	require.Equal(t, float64(numSeries*3), m.Metric[0].Gauge.GetValue(), "agent wal truncate mismatch of deleted series count")
 }
 
+func TestCheckSeriesRefInWAL(t *testing.T) {
+	storageDir := "/Users/paulintodev/Desktop/wal_dropped_sample"
+	reg := prometheus.NewRegistry()
+	replayStorage, err := Open(log.NewNopLogger(), reg, nil, storageDir, nil)
+	if err != nil {
+		t.Fatalf("unable to create storage for the agent: %v", err)
+	}
+	defer func() {
+		require.NoError(t, replayStorage.Close())
+	}()
+
+	// Check if lastTs of the samples retrieved from the WAL is retained.
+	metrics := replayStorage.series.series
+	for i := 0; i < len(metrics); i++ {
+		mp := metrics[i]
+		for refId, v := range mp {
+			fmt.Printf("RefID:%v,Labels:%s\n", refId, v.lset.String())
+		}
+	}
+}
+
 func TestWALReplay(t *testing.T) {
 	const (
 		numDatapoints = 1000

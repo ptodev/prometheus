@@ -578,9 +578,11 @@ outer:
 		t.seriesMtx.Lock()
 		lbls, ok := t.seriesLabels[s.Ref]
 		if !ok {
+			//TODO: Should we make this a more unique metric so that we can alert on it?
 			t.metrics.droppedSamplesTotal.Inc()
 			t.dataDropped.incr(1)
 			if _, ok := t.droppedSeries[s.Ref]; !ok {
+				//TODO: Print the labels of the series? Advise the WAL to be copied for debugging purposes? Or even copy the WAL on your own, the same way a memory dump could be created?
 				level.Info(t.logger).Log("msg", "Dropped sample for series that was not explicitly dropped via relabelling", "ref", s.Ref)
 			}
 			t.seriesMtx.Unlock()
@@ -682,6 +684,7 @@ outer:
 			t.metrics.droppedHistogramsTotal.Inc()
 			t.dataDropped.incr(1)
 			if _, ok := t.droppedSeries[h.Ref]; !ok {
+				//TODO: Can we also log whether this series was garbage collected or not? Maybe as a label value?
 				level.Info(t.logger).Log("msg", "Dropped histogram for series that was not explicitly dropped via relabelling", "ref", h.Ref)
 			}
 			t.seriesMtx.Unlock()
@@ -819,6 +822,8 @@ func (t *QueueManager) StoreSeries(series []record.RefSeries, index int) {
 	defer t.seriesSegmentMtx.Unlock()
 	for _, s := range series {
 		// Just make sure all the Refs of Series will insert into seriesSegmentIndexes map for tracking.
+		//TODO: Shouldn't this be done after the drop due to relabeling?
+		//TODO: Check that the new index is bigger than the current?
 		t.seriesSegmentIndexes[s.Ref] = index
 
 		ls := processExternalLabels(s.Labels, t.externalLabels)
@@ -845,6 +850,7 @@ func (t *QueueManager) UpdateSeriesSegment(series []record.RefSeries, index int)
 	t.seriesSegmentMtx.Lock()
 	defer t.seriesSegmentMtx.Unlock()
 	for _, s := range series {
+		//TODO: Check that the new index is bigger than the current?
 		t.seriesSegmentIndexes[s.Ref] = index
 	}
 }

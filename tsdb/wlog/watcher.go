@@ -498,6 +498,7 @@ func (w *Watcher) watch(segmentNum int, tail bool) error {
 }
 
 func (w *Watcher) garbageCollectSeries(segmentNum int) error {
+	//TODO: What about startup, when there are no checkpoint folders yet?
 	dir, _, err := LastCheckpoint(w.walDir)
 	if err != nil && err != record.ErrNotFound {
 		return errors.Wrap(err, "tsdb.LastCheckpoint")
