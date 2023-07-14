@@ -34,18 +34,19 @@ import (
 	"github.com/prometheus/prometheus/util/osutil"
 )
 
-var targetMetadataCache = newMetadataMetricsCollector()
+type TargetsGatherer interface {
+	TargetsActive() map[string][]*Target
+}
 
 // MetadataMetricsCollector is a Custom Collector for the metadata cache metrics.
 type MetadataMetricsCollector struct {
-	CacheEntries *prometheus.Desc
-	CacheBytes   *prometheus.Desc
-
-	scrapeManager *Manager
+	CacheEntries    *prometheus.Desc
+	CacheBytes      *prometheus.Desc
+	TargetsGatherer TargetsGatherer
 }
 
-func newMetadataMetricsCollector() *MetadataMetricsCollector {
-	return &MetadataMetricsCollector{
+func newMetadataMetricsCollector(tg TargetsGatherer, registerer prometheus.Registerer) (*MetadataMetricsCollector, error) {
+	metadataMetricsCollector := &MetadataMetricsCollector{
 		CacheEntries: prometheus.NewDesc(
 			"prometheus_target_metadata_cache_entries",
 			"Total number of metric metadata entries in the cache",
@@ -58,11 +59,15 @@ func newMetadataMetricsCollector() *MetadataMetricsCollector {
 			[]string{"scrape_job"},
 			nil,
 		),
+		TargetsGatherer: tg,
 	}
-}
 
-func (mc *MetadataMetricsCollector) registerManager(m *Manager) {
-	mc.scrapeManager = m
+	err := registerer.Register(metadataMetricsCollector)
+	if err != nil {
+		return nil, err
+	}
+
+	return metadataMetricsCollector, nil
 }
 
 // Describe sends the metrics descriptions to the channel.
@@ -73,11 +78,7 @@ func (mc *MetadataMetricsCollector) Describe(ch chan<- *prometheus.Desc) {
 
 // Collect creates and sends the metrics for the metadata cache.
 func (mc *MetadataMetricsCollector) Collect(ch chan<- prometheus.Metric) {
-	if mc.scrapeManager == nil {
-		return
-	}
-
-	for tset, targets := range mc.scrapeManager.TargetsActive() {
+	for tset, targets := range mc.TargetsGatherer.TargetsActive() {
 		var size, length int
 		for _, t := range targets {
 			size += t.MetadataSize()
@@ -101,7 +102,7 @@ func (mc *MetadataMetricsCollector) Collect(ch chan<- prometheus.Metric) {
 }
 
 // NewManager is the Manager constructor
-func NewManager(o *Options, logger log.Logger, app storage.Appendable) *Manager {
+func NewManager(o *Options, logger log.Logger, app storage.Appendable, registerer prometheus.Registerer) *Manager {
 	if o == nil {
 		o = &Options{}
 	}
@@ -112,14 +113,54 @@ func NewManager(o *Options, logger log.Logger, app storage.Appendable) *Manager 
 		append:        app,
 		opts:          o,
 		logger:        logger,
+		registerer:    registerer,
 		scrapeConfigs: make(map[string]*config.ScrapeConfig),
 		scrapePools:   make(map[string]*scrapePool),
 		graceShut:     make(chan struct{}),
 		triggerReload: make(chan struct{}, 1),
 	}
-	targetMetadataCache.registerManager(m)
+
+	var err error
+	m.targetMetadataCache, err = newMetadataMetricsCollector(m, registerer)
+	if err != nil {
+		panic(err)
+	}
+
+	err = m.initMetriics(registerer)
+	if err != nil {
+		panic(err)
+	}
 
 	return m
+}
+
+func (m *Manager) initMetriics(registerer prometheus.Registerer) error {
+	m.targetScrapePools = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "prometheus_target_scrape_pools_total",
+			Help: "Total number of scrape pool creation attempts.",
+		},
+	)
+	m.targetScrapePoolsFailed = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "prometheus_target_scrape_pools_failed_total",
+			Help: "Total number of scrape pool creations that failed.",
+		},
+	)
+
+	if registerer != nil {
+		for _, collector := range []prometheus.Collector{
+			m.targetScrapePools,
+			m.targetScrapePoolsFailed,
+		} {
+			err := registerer.Register(collector)
+			if err != nil {
+				//TODO: Wrao the error
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // Options are the configuration parameters to the scrape manager.
@@ -145,10 +186,11 @@ type Options struct {
 // Manager maintains a set of scrape pools and manages start/stop cycles
 // when receiving new target groups from the discovery manager.
 type Manager struct {
-	opts      *Options
-	logger    log.Logger
-	append    storage.Appendable
-	graceShut chan struct{}
+	opts       *Options
+	logger     log.Logger
+	registerer prometheus.Registerer
+	append     storage.Appendable
+	graceShut  chan struct{}
 
 	offsetSeed    uint64     // Global offsetSeed seed is used to spread scrape workload across HA setup.
 	mtxScrape     sync.Mutex // Guards the fields below.
@@ -157,6 +199,10 @@ type Manager struct {
 	targetSets    map[string][]*targetgroup.Group
 
 	triggerReload chan struct{}
+
+	targetMetadataCache     *MetadataMetricsCollector
+	targetScrapePools       prometheus.Counter
+	targetScrapePoolsFailed prometheus.Counter
 }
 
 // Run receives and saves target set updates and triggers the scraping loops reloading.
@@ -214,8 +260,10 @@ func (m *Manager) reload() {
 				level.Error(m.logger).Log("msg", "error reloading target set", "err", "invalid config id:"+setName)
 				continue
 			}
-			sp, err := newScrapePool(scrapeConfig, m.append, m.offsetSeed, log.With(m.logger, "scrape_pool", setName), m.opts)
+			m.targetScrapePools.Inc()
+			sp, err := newScrapePool(scrapeConfig, m.append, m.offsetSeed, log.With(m.logger, "scrape_pool", setName), m.opts, m.registerer)
 			if err != nil {
+				m.targetScrapePoolsFailed.Inc()
 				level.Error(m.logger).Log("msg", "error creating new scrape pool", "err", err, "scrape_pool", setName)
 				continue
 			}

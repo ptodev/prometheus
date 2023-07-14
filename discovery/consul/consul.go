@@ -105,7 +105,6 @@ var (
 
 func init() {
 	discovery.RegisterConfig(&SDConfig{})
-	prometheus.MustRegister(rpcFailuresCount, rpcDuration)
 }
 
 // SDConfig is the configuration for Consul service discovery.
@@ -147,7 +146,7 @@ func (*SDConfig) Name() string { return "consul" }
 
 // NewDiscoverer returns a Discoverer for the Config.
 func (c *SDConfig) NewDiscoverer(opts discovery.DiscovererOptions) (discovery.Discoverer, error) {
-	return NewDiscovery(c, opts.Logger)
+	return NewDiscovery(c, opts.Logger, opts.Registerer)
 }
 
 // SetDirectory joins any relative file paths with dir.
@@ -199,7 +198,7 @@ type Discovery struct {
 }
 
 // NewDiscovery returns a new Discovery for the given config.
-func NewDiscovery(conf *SDConfig, logger log.Logger) (*Discovery, error) {
+func NewDiscovery(conf *SDConfig, logger log.Logger, reg prometheus.Registerer) (*Discovery, error) {
 	if logger == nil {
 		logger = log.NewNopLogger()
 	}
@@ -238,6 +237,16 @@ func NewDiscovery(conf *SDConfig, logger log.Logger) (*Discovery, error) {
 		finalizer:        wrapper.CloseIdleConnections,
 		logger:           logger,
 	}
+
+	if reg != nil {
+		reg.MustRegister(rpcFailuresCount, rpcDuration)
+	} else {
+		//TODO: This is a breaking change, because if there is more than one
+		// discovery component of the same type, MustRegister will panic. Is this ok/
+		//TODO: Should we keep falling back to the default registry?
+		prometheus.MustRegister(rpcFailuresCount, rpcDuration)
+	}
+
 	return cd, nil
 }
 

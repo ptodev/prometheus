@@ -58,7 +58,7 @@ func TestNewScrapePool(t *testing.T) {
 	var (
 		app   = &nopAppendable{}
 		cfg   = &config.ScrapeConfig{}
-		sp, _ = newScrapePool(cfg, app, 0, nil, &Options{})
+		sp, _ = newScrapePool(cfg, app, 0, nil, &Options{}, nil)
 	)
 
 	if a, ok := sp.appendable.(*nopAppendable); !ok || a != app {
@@ -93,7 +93,7 @@ func TestDroppedTargetsList(t *testing.T) {
 				},
 			},
 		}
-		sp, _                  = newScrapePool(cfg, app, 0, nil, &Options{})
+		sp, _                  = newScrapePool(cfg, app, 0, nil, &Options{}, nil)
 		expectedLabelSetString = "{__address__=\"127.0.0.1:9090\", __scrape_interval__=\"0s\", __scrape_timeout__=\"0s\", job=\"dropMe\"}"
 		expectedLength         = 1
 	)
@@ -482,7 +482,7 @@ func TestScrapePoolTargetLimit(t *testing.T) {
 func TestScrapePoolAppender(t *testing.T) {
 	cfg := &config.ScrapeConfig{}
 	app := &nopAppendable{}
-	sp, _ := newScrapePool(cfg, app, 0, nil, &Options{})
+	sp, _ := newScrapePool(cfg, app, 0, nil, &Options{}, nil)
 
 	loop := sp.newLoop(scrapeLoopOptions{
 		target: &Target{},
@@ -538,7 +538,7 @@ func TestScrapePoolRaces(t *testing.T) {
 	newConfig := func() *config.ScrapeConfig {
 		return &config.ScrapeConfig{ScrapeInterval: interval, ScrapeTimeout: timeout}
 	}
-	sp, _ := newScrapePool(newConfig(), &nopAppendable{}, 0, nil, &Options{})
+	sp, _ := newScrapePool(newConfig(), &nopAppendable{}, 0, nil, &Options{}, nil)
 	tgts := []*targetgroup.Group{
 		{
 			Targets: []model.LabelSet{
@@ -620,7 +620,7 @@ func TestScrapePoolScrapeLoopsStarted(t *testing.T) {
 func TestScrapeLoopStopBeforeRun(t *testing.T) {
 	scraper := &testScraper{}
 
-	sl := newScrapeLoop(context.Background(),
+	sl, err := newScrapeLoop(context.Background(),
 		scraper,
 		nil, nil,
 		nopMutator,
@@ -636,7 +636,9 @@ func TestScrapeLoopStopBeforeRun(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	// The scrape pool synchronizes on stopping scrape loops. However, new scrape
 	// loops are started asynchronously. Thus it's possible, that a loop is stopped
@@ -691,7 +693,7 @@ func TestScrapeLoopStop(t *testing.T) {
 		app      = func(ctx context.Context) storage.Appender { return appender }
 	)
 
-	sl := newScrapeLoop(context.Background(),
+	sl, err := newScrapeLoop(context.Background(),
 		scraper,
 		nil, nil,
 		nopMutator,
@@ -709,7 +711,9 @@ func TestScrapeLoopStop(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	// Terminate loop after 2 scrapes.
 	numScrapes := 0
@@ -768,7 +772,7 @@ func TestScrapeLoopRun(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sl := newScrapeLoop(ctx,
+	sl, err := newScrapeLoop(ctx,
 		scraper,
 		nil, nil,
 		nopMutator,
@@ -786,7 +790,9 @@ func TestScrapeLoopRun(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	// The loop must terminate during the initial offset if the context
 	// is canceled.
@@ -824,7 +830,7 @@ func TestScrapeLoopRun(t *testing.T) {
 	}
 
 	ctx, cancel = context.WithCancel(context.Background())
-	sl = newScrapeLoop(ctx,
+	sl, err = newScrapeLoop(ctx,
 		scraper,
 		nil, nil,
 		nopMutator,
@@ -842,7 +848,9 @@ func TestScrapeLoopRun(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	go func() {
 		sl.run(errc)
@@ -884,7 +892,7 @@ func TestScrapeLoopForcedErr(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sl := newScrapeLoop(ctx,
+	sl, err := newScrapeLoop(ctx,
 		scraper,
 		nil, nil,
 		nopMutator,
@@ -902,7 +910,9 @@ func TestScrapeLoopForcedErr(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	forcedErr := fmt.Errorf("forced err")
 	sl.setForcedError(forcedErr)
@@ -936,14 +946,14 @@ func TestScrapeLoopForcedErr(t *testing.T) {
 
 func TestScrapeLoopMetadata(t *testing.T) {
 	var (
-		signal  = make(chan struct{})
-		scraper = &testScraper{}
-		cache   = newScrapeCache()
+		signal     = make(chan struct{})
+		scraper    = &testScraper{}
+		cache, err = newScrapeCache(prometheus.DefaultRegisterer)
 	)
 	defer close(signal)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sl := newScrapeLoop(ctx,
+	sl, err := newScrapeLoop(ctx,
 		scraper,
 		nil, nil,
 		nopMutator,
@@ -961,7 +971,9 @@ func TestScrapeLoopMetadata(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 	defer cancel()
 
 	slApp := sl.appender(ctx)
@@ -1001,7 +1013,7 @@ func simpleTestScrapeLoop(t testing.TB) (context.Context, *scrapeLoop) {
 	t.Cleanup(func() { s.Close() })
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sl := newScrapeLoop(ctx,
+	sl, err := newScrapeLoop(ctx,
 		&testScraper{},
 		nil, nil,
 		nopMutator,
@@ -1019,7 +1031,9 @@ func simpleTestScrapeLoop(t testing.TB) (context.Context, *scrapeLoop) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 	t.Cleanup(func() { cancel() })
 
 	return ctx, sl
@@ -1060,7 +1074,7 @@ func TestScrapeLoopFailWithInvalidLabelsAfterRelabel(t *testing.T) {
 		Separator:   ";",
 		Replacement: "$1",
 	}}
-	sl := newScrapeLoop(ctx,
+	sl, err := newScrapeLoop(ctx,
 		&testScraper{},
 		nil, nil,
 		func(l labels.Labels) labels.Labels {
@@ -1080,7 +1094,9 @@ func TestScrapeLoopFailWithInvalidLabelsAfterRelabel(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	slApp := sl.appender(ctx)
 	total, added, seriesAdded, err := sl.append(slApp, []byte("test_metric 1\n"), "", time.Time{})
@@ -1141,7 +1157,7 @@ func TestScrapeLoopRunCreatesStaleMarkersOnFailedScrape(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sl := newScrapeLoop(ctx,
+	sl, err := newScrapeLoop(ctx,
 		scraper,
 		nil, nil,
 		nopMutator,
@@ -1159,7 +1175,9 @@ func TestScrapeLoopRunCreatesStaleMarkersOnFailedScrape(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 	// Succeed once, several failures, then stop.
 	numScrapes := 0
 
@@ -1205,7 +1223,7 @@ func TestScrapeLoopRunCreatesStaleMarkersOnParseFailure(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sl := newScrapeLoop(ctx,
+	sl, err := newScrapeLoop(ctx,
 		scraper,
 		nil, nil,
 		nopMutator,
@@ -1223,7 +1241,9 @@ func TestScrapeLoopRunCreatesStaleMarkersOnParseFailure(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	// Succeed once, several failures, then stop.
 	scraper.scrapeFunc = func(ctx context.Context, w io.Writer) error {
@@ -1272,7 +1292,7 @@ func TestScrapeLoopCache(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sl := newScrapeLoop(ctx,
+	sl, err := newScrapeLoop(ctx,
 		scraper,
 		nil, nil,
 		nopMutator,
@@ -1290,7 +1310,9 @@ func TestScrapeLoopCache(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	numScrapes := 0
 
@@ -1356,7 +1378,7 @@ func TestScrapeLoopCacheMemoryExhaustionProtection(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sl := newScrapeLoop(ctx,
+	sl, err := newScrapeLoop(ctx,
 		scraper,
 		nil, nil,
 		nopMutator,
@@ -1374,7 +1396,9 @@ func TestScrapeLoopCacheMemoryExhaustionProtection(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	numScrapes := 0
 
@@ -1468,7 +1492,7 @@ func TestScrapeLoopAppend(t *testing.T) {
 			labels: labels.FromStrings(test.discoveryLabels...),
 		}
 
-		sl := newScrapeLoop(context.Background(),
+		sl, err := newScrapeLoop(context.Background(),
 			nil, nil, nil,
 			func(l labels.Labels) labels.Labels {
 				return mutateSampleLabels(l, discoveryLabels, test.honorLabels, nil)
@@ -1489,12 +1513,14 @@ func TestScrapeLoopAppend(t *testing.T) {
 			false,
 			nil,
 			false,
+			prometheus.DefaultRegisterer,
 		)
+		require.NoError(t, err)
 
 		now := time.Now()
 
 		slApp := sl.appender(context.Background())
-		_, _, _, err := sl.append(slApp, []byte(test.scrapeLabels), "", now)
+		_, _, _, err = sl.append(slApp, []byte(test.scrapeLabels), "", now)
 		require.NoError(t, err)
 		require.NoError(t, slApp.Commit())
 
@@ -1571,15 +1597,17 @@ func TestScrapeLoopAppendForConflictingPrefixedLabels(t *testing.T) {
 	for name, tc := range testcases {
 		t.Run(name, func(t *testing.T) {
 			app := &collectResultAppender{}
-			sl := newScrapeLoop(context.Background(), nil, nil, nil,
+			sl, err := newScrapeLoop(context.Background(), nil, nil, nil,
 				func(l labels.Labels) labels.Labels {
 					return mutateSampleLabels(l, &Target{labels: labels.FromStrings(tc.targetLabels...)}, false, nil)
 				},
 				nil,
-				func(ctx context.Context) storage.Appender { return app }, nil, 0, true, 0, 0, nil, 0, 0, false, false, false, nil, false,
+				func(ctx context.Context) storage.Appender { return app },
+				nil, 0, true, 0, 0, nil, 0, 0, false, false, false, nil, false, prometheus.DefaultRegisterer,
 			)
+			require.NoError(t, err)
 			slApp := sl.appender(context.Background())
-			_, _, _, err := sl.append(slApp, []byte(tc.exposedLabels), "", time.Date(2000, 1, 1, 1, 0, 0, 0, time.UTC))
+			_, _, _, err = sl.append(slApp, []byte(tc.exposedLabels), "", time.Date(2000, 1, 1, 1, 0, 0, 0, time.UTC))
 			require.NoError(t, err)
 
 			require.NoError(t, slApp.Commit())
@@ -1599,7 +1627,7 @@ func TestScrapeLoopAppendCacheEntryButErrNotFound(t *testing.T) {
 	// collectResultAppender's AddFast always returns ErrNotFound if we don't give it a next.
 	app := &collectResultAppender{}
 
-	sl := newScrapeLoop(context.Background(),
+	sl, err := newScrapeLoop(context.Background(),
 		nil, nil, nil,
 		nopMutator,
 		nopMutator,
@@ -1616,7 +1644,9 @@ func TestScrapeLoopAppendCacheEntryButErrNotFound(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	fakeRef := storage.SeriesRef(1)
 	expValue := float64(1)
@@ -1634,7 +1664,7 @@ func TestScrapeLoopAppendCacheEntryButErrNotFound(t *testing.T) {
 	now := time.Now()
 
 	slApp := sl.appender(context.Background())
-	_, _, _, err := sl.append(slApp, metric, "", now)
+	_, _, _, err = sl.append(slApp, metric, "", now)
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
@@ -1653,7 +1683,7 @@ func TestScrapeLoopAppendSampleLimit(t *testing.T) {
 	resApp := &collectResultAppender{}
 	app := &limitAppender{Appender: resApp, limit: 1}
 
-	sl := newScrapeLoop(context.Background(),
+	sl, err := newScrapeLoop(context.Background(),
 		nil, nil, nil,
 		func(l labels.Labels) labels.Labels {
 			if l.Has("deleteme") {
@@ -1675,11 +1705,13 @@ func TestScrapeLoopAppendSampleLimit(t *testing.T) {
 		false,
 		nil,
 		false,
+		promethe
+		require.NoError(t, err)us.DefaultRegisterer,
 	)
 
 	// Get the value of the Counter before performing the append.
 	beforeMetric := dto.Metric{}
-	err := targetScrapeSampleLimit.Write(&beforeMetric)
+	err = sl.targetScrapeSampleLimit.Write(&beforeMetric)
 	require.NoError(t, err)
 
 	beforeMetricValue := beforeMetric.GetCounter().GetValue()
@@ -1698,7 +1730,7 @@ func TestScrapeLoopAppendSampleLimit(t *testing.T) {
 	// Check that the Counter has been incremented a single time for the scrape,
 	// not multiple times for each sample.
 	metric := dto.Metric{}
-	err = targetScrapeSampleLimit.Write(&metric)
+	err = sl.targetScrapeSampleLimit.Write(&metric)
 	require.NoError(t, err)
 
 	value := metric.GetCounter().GetValue()
@@ -1731,7 +1763,7 @@ func TestScrapeLoop_HistogramBucketLimit(t *testing.T) {
 	resApp := &collectResultAppender{}
 	app := &bucketLimitAppender{Appender: resApp, limit: 2}
 
-	sl := newScrapeLoop(context.Background(),
+	sl, err := newScrapeLoop(context.Background(),
 		nil, nil, nil,
 		func(l labels.Labels) labels.Labels {
 			if l.Has("deleteme") {
@@ -1753,10 +1785,12 @@ func TestScrapeLoop_HistogramBucketLimit(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	metric := dto.Metric{}
-	err := targetScrapeNativeHistogramBucketLimit.Write(&metric)
+	err = sl.targetScrapeNativeHistogramBucketLimit.Write(&metric)
 	require.NoError(t, err)
 	beforeMetricValue := metric.GetCounter().GetValue()
 
@@ -1794,7 +1828,7 @@ func TestScrapeLoop_HistogramBucketLimit(t *testing.T) {
 	require.Equal(t, 3, added)
 	require.Equal(t, 3, seriesAdded)
 
-	err = targetScrapeNativeHistogramBucketLimit.Write(&metric)
+	err = sl.targetScrapeNativeHistogramBucketLimit.Write(&metric)
 	require.NoError(t, err)
 	metricValue := metric.GetCounter().GetValue()
 	require.Equal(t, beforeMetricValue, metricValue)
@@ -1820,7 +1854,7 @@ func TestScrapeLoop_HistogramBucketLimit(t *testing.T) {
 	require.Equal(t, 3, added)
 	require.Equal(t, 0, seriesAdded)
 
-	err = targetScrapeNativeHistogramBucketLimit.Write(&metric)
+	err = sl.targetScrapeNativeHistogramBucketLimit.Write(&metric)
 	require.NoError(t, err)
 	metricValue = metric.GetCounter().GetValue()
 	require.Equal(t, beforeMetricValue+1, metricValue)
@@ -1835,7 +1869,7 @@ func TestScrapeLoop_ChangingMetricString(t *testing.T) {
 
 	capp := &collectResultAppender{}
 
-	sl := newScrapeLoop(context.Background(),
+	sl, err := newScrapeLoop(context.Background(),
 		nil, nil, nil,
 		nopMutator,
 		nopMutator,
@@ -1852,11 +1886,13 @@ func TestScrapeLoop_ChangingMetricString(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	now := time.Now()
 	slApp := sl.appender(context.Background())
-	_, _, _, err := sl.append(slApp, []byte(`metric_a{a="1",b="1"} 1`), "", now)
+	_, _, _, err = sl.append(slApp, []byte(`metric_a{a="1",b="1"} 1`), "", now)
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
@@ -1884,7 +1920,7 @@ func TestScrapeLoop_ChangingMetricString(t *testing.T) {
 func TestScrapeLoopAppendStaleness(t *testing.T) {
 	app := &collectResultAppender{}
 
-	sl := newScrapeLoop(context.Background(),
+	sl, err := newScrapeLoop(context.Background(),
 		nil, nil, nil,
 		nopMutator,
 		nopMutator,
@@ -1901,11 +1937,13 @@ func TestScrapeLoopAppendStaleness(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	now := time.Now()
 	slApp := sl.appender(context.Background())
-	_, _, _, err := sl.append(slApp, []byte("metric_a 1\n"), "", now)
+	_, _, _, err = sl.append(slApp, []byte("metric_a 1\n"), "", now)
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
@@ -1936,7 +1974,7 @@ func TestScrapeLoopAppendStaleness(t *testing.T) {
 
 func TestScrapeLoopAppendNoStalenessIfTimestamp(t *testing.T) {
 	app := &collectResultAppender{}
-	sl := newScrapeLoop(context.Background(),
+	sl, err := newScrapeLoop(context.Background(),
 		nil, nil, nil,
 		nopMutator,
 		nopMutator,
@@ -1953,11 +1991,13 @@ func TestScrapeLoopAppendNoStalenessIfTimestamp(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	now := time.Now()
 	slApp := sl.appender(context.Background())
-	_, _, _, err := sl.append(slApp, []byte("metric_a 1 1000\n"), "", now)
+	_, _, _, err = sl.append(slApp, []byte("metric_a 1 1000\n"), "", now)
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
@@ -2044,7 +2084,7 @@ metric_total{n="2"} 2 # {t="2"} 2.0 20000
 				labels: labels.FromStrings(test.discoveryLabels...),
 			}
 
-			sl := newScrapeLoop(context.Background(),
+			sl, err := newScrapeLoop(context.Background(),
 				nil, nil, nil,
 				func(l labels.Labels) labels.Labels {
 					return mutateSampleLabels(l, discoveryLabels, false, nil)
@@ -2065,7 +2105,9 @@ metric_total{n="2"} 2 # {t="2"} 2.0 20000
 				false,
 				nil,
 				false,
+				prometheus.DefaultRegisterer,
 			)
+			require.NoError(t, err)
 
 			now := time.Now()
 
@@ -2080,7 +2122,7 @@ metric_total{n="2"} 2 # {t="2"} 2.0 20000
 				}
 			}
 
-			_, _, _, err := sl.append(app, []byte(test.scrapeText), "application/openmetrics-text", now)
+			_, _, _, err = sl.append(app, []byte(test.scrapeText), "application/openmetrics-text", now)
 			require.NoError(t, err)
 			require.NoError(t, app.Commit())
 			require.Equal(t, test.samples, app.result)
@@ -2110,7 +2152,7 @@ func TestScrapeLoopAppendExemplarSeries(t *testing.T) {
 
 	app := &collectResultAppender{}
 
-	sl := newScrapeLoop(context.Background(),
+	sl, err := newScrapeLoop(context.Background(),
 		nil, nil, nil,
 		func(l labels.Labels) labels.Labels {
 			return mutateSampleLabels(l, discoveryLabels, false, nil)
@@ -2131,7 +2173,9 @@ func TestScrapeLoopAppendExemplarSeries(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	now := time.Now()
 
@@ -2166,7 +2210,7 @@ func TestScrapeLoopRunReportsTargetDownOnScrapeError(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sl := newScrapeLoop(ctx,
+	sl, err := newScrapeLoop(ctx,
 		scraper,
 		nil, nil,
 		nopMutator,
@@ -2184,7 +2228,9 @@ func TestScrapeLoopRunReportsTargetDownOnScrapeError(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	scraper.scrapeFunc = func(ctx context.Context, w io.Writer) error {
 		cancel()
@@ -2203,7 +2249,7 @@ func TestScrapeLoopRunReportsTargetDownOnInvalidUTF8(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sl := newScrapeLoop(ctx,
+	sl, err := newScrapeLoop(ctx,
 		scraper,
 		nil, nil,
 		nopMutator,
@@ -2221,7 +2267,9 @@ func TestScrapeLoopRunReportsTargetDownOnInvalidUTF8(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	scraper.scrapeFunc = func(ctx context.Context, w io.Writer) error {
 		cancel()
@@ -2253,7 +2301,7 @@ func (app *errorAppender) Append(ref storage.SeriesRef, lset labels.Labels, t in
 func TestScrapeLoopAppendGracefullyIfAmendOrOutOfOrderOrOutOfBounds(t *testing.T) {
 	app := &errorAppender{}
 
-	sl := newScrapeLoop(context.Background(),
+	sl, err := newScrapeLoop(context.Background(),
 		nil,
 		nil, nil,
 		nopMutator,
@@ -2271,7 +2319,9 @@ func TestScrapeLoopAppendGracefullyIfAmendOrOutOfOrderOrOutOfBounds(t *testing.T
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	now := time.Unix(1, 0)
 	slApp := sl.appender(context.Background())
@@ -2294,7 +2344,7 @@ func TestScrapeLoopAppendGracefullyIfAmendOrOutOfOrderOrOutOfBounds(t *testing.T
 
 func TestScrapeLoopOutOfBoundsTimeError(t *testing.T) {
 	app := &collectResultAppender{}
-	sl := newScrapeLoop(context.Background(),
+	sl, err := newScrapeLoop(context.Background(),
 		nil,
 		nil, nil,
 		nopMutator,
@@ -2317,7 +2367,9 @@ func TestScrapeLoopOutOfBoundsTimeError(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	now := time.Now().Add(20 * time.Minute)
 	slApp := sl.appender(context.Background())
@@ -2574,7 +2626,7 @@ func TestScrapeLoop_RespectTimestamps(t *testing.T) {
 
 	capp := &collectResultAppender{next: app}
 
-	sl := newScrapeLoop(context.Background(),
+	sl, err := newScrapeLoop(context.Background(),
 		nil, nil, nil,
 		nopMutator,
 		nopMutator,
@@ -2590,11 +2642,13 @@ func TestScrapeLoop_RespectTimestamps(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	now := time.Now()
 	slApp := sl.appender(context.Background())
-	_, _, _, err := sl.append(slApp, []byte(`metric_a{a="1",b="1"} 1 0`), "", now)
+	_, _, _, err = sl.append(slApp, []byte(`metric_a{a="1",b="1"} 1 0`), "", now)
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
@@ -2616,7 +2670,7 @@ func TestScrapeLoop_DiscardTimestamps(t *testing.T) {
 
 	capp := &collectResultAppender{next: app}
 
-	sl := newScrapeLoop(context.Background(),
+	sl, err := newScrapeLoop(context.Background(),
 		nil, nil, nil,
 		nopMutator,
 		nopMutator,
@@ -2632,11 +2686,13 @@ func TestScrapeLoop_DiscardTimestamps(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	now := time.Now()
 	slApp := sl.appender(context.Background())
-	_, _, _, err := sl.append(slApp, []byte(`metric_a{a="1",b="1"} 1 0`), "", now)
+	_, _, _, err = sl.append(slApp, []byte(`metric_a{a="1",b="1"} 1 0`), "", now)
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
@@ -2655,7 +2711,7 @@ func TestScrapeLoopDiscardDuplicateLabels(t *testing.T) {
 	defer s.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sl := newScrapeLoop(ctx,
+	sl, err := newScrapeLoop(ctx,
 		&testScraper{},
 		nil, nil,
 		nopMutator,
@@ -2673,12 +2729,14 @@ func TestScrapeLoopDiscardDuplicateLabels(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 	defer cancel()
 
 	// We add a good and a bad metric to check that both are discarded.
 	slApp := sl.appender(ctx)
-	_, _, _, err := sl.append(slApp, []byte("test_metric{le=\"500\"} 1\ntest_metric{le=\"600\",le=\"700\"} 1\n"), "", time.Time{})
+	_, _, _, err = sl.append(slApp, []byte("test_metric{le=\"500\"} 1\ntest_metric{le=\"600\",le=\"700\"} 1\n"), "", time.Time{})
 	require.Error(t, err)
 	require.NoError(t, slApp.Rollback())
 
@@ -2709,7 +2767,7 @@ func TestScrapeLoopDiscardUnnamedMetrics(t *testing.T) {
 	app := s.Appender(context.Background())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sl := newScrapeLoop(context.Background(),
+	sl, err := newScrapeLoop(context.Background(),
 		&testScraper{},
 		nil, nil,
 		func(l labels.Labels) labels.Labels {
@@ -2732,11 +2790,13 @@ func TestScrapeLoopDiscardUnnamedMetrics(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 	defer cancel()
 
 	slApp := sl.appender(context.Background())
-	_, _, _, err := sl.append(slApp, []byte("nok 1\nnok2{drop=\"drop\"} 1\n"), "", time.Time{})
+	_, _, _, err = sl.append(slApp, []byte("nok 1\nnok2{drop=\"drop\"} 1\n"), "", time.Time{})
 	require.Error(t, err)
 	require.NoError(t, slApp.Rollback())
 	require.Equal(t, errNameLabelMandatory, err)
@@ -2824,7 +2884,7 @@ func TestReuseScrapeCache(t *testing.T) {
 			ScrapeInterval: model.Duration(5 * time.Second),
 			MetricsPath:    "/metrics",
 		}
-		sp, _ = newScrapePool(cfg, app, 0, nil, &Options{})
+		sp, _ = newScrapePool(cfg, app, 0, nil, &Options{}, nil)
 		t1    = &Target{
 			discoveredLabels: labels.FromStrings("labelNew", "nameNew", "labelNew1", "nameNew1", "labelNew2", "nameNew2"),
 		}
@@ -2978,7 +3038,7 @@ func TestScrapeAddFast(t *testing.T) {
 	defer s.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sl := newScrapeLoop(ctx,
+	sl, err := newScrapeLoop(ctx,
 		&testScraper{},
 		nil, nil,
 		nopMutator,
@@ -2996,11 +3056,13 @@ func TestScrapeAddFast(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 	defer cancel()
 
 	slApp := sl.appender(ctx)
-	_, _, _, err := sl.append(slApp, []byte("up 1\n"), "", time.Time{})
+	_, _, _, err = sl.append(slApp, []byte("up 1\n"), "", time.Time{})
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
@@ -3025,7 +3087,7 @@ func TestReuseCacheRace(*testing.T) {
 			ScrapeInterval: model.Duration(5 * time.Second),
 			MetricsPath:    "/metrics",
 		}
-		sp, _ = newScrapePool(cfg, app, 0, nil, &Options{})
+		sp, _ = newScrapePool(cfg, app, 0, nil, &Options{}, nil)
 		t1    = &Target{
 			discoveredLabels: labels.FromStrings("labelNew", "nameNew"),
 		}
@@ -3065,7 +3127,7 @@ func TestScrapeReportSingleAppender(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sl := newScrapeLoop(ctx,
+	sl, err := newScrapeLoop(ctx,
 		scraper,
 		nil, nil,
 		nopMutator,
@@ -3083,7 +3145,9 @@ func TestScrapeReportSingleAppender(t *testing.T) {
 		false,
 		nil,
 		false,
+		prometheus.DefaultRegisterer,
 	)
+	require.NoError(t, err)
 
 	numScrapes := 0
 
@@ -3153,7 +3217,7 @@ func TestScrapeReportLimit(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	sp, err := newScrapePool(cfg, s, 0, nil, &Options{})
+	sp, err := newScrapePool(cfg, s, 0, nil, &Options{}, nil)
 	require.NoError(t, err)
 	defer sp.stop()
 
@@ -3265,7 +3329,7 @@ func TestScrapeLoopLabelLimit(t *testing.T) {
 			labels: labels.FromStrings(test.discoveryLabels...),
 		}
 
-		sl := newScrapeLoop(context.Background(),
+		sl, err := newScrapeLoop(context.Background(),
 			nil, nil, nil,
 			func(l labels.Labels) labels.Labels {
 				return mutateSampleLabels(l, discoveryLabels, false, nil)
@@ -3286,10 +3350,12 @@ func TestScrapeLoopLabelLimit(t *testing.T) {
 			false,
 			nil,
 			false,
+			prometheus.DefaultRegisterer,
 		)
+		require.NoError(t, err)
 
 		slApp := sl.appender(context.Background())
-		_, _, _, err := sl.append(slApp, []byte(test.scrapeLabels), "", time.Now())
+		_, _, _, err = sl.append(slApp, []byte(test.scrapeLabels), "", time.Now())
 
 		t.Logf("Test:%s", test.title)
 		if test.expectErr {
@@ -3324,7 +3390,7 @@ func TestTargetScrapeIntervalAndTimeoutRelabel(t *testing.T) {
 			},
 		},
 	}
-	sp, _ := newScrapePool(config, &nopAppendable{}, 0, nil, &Options{})
+	sp, _ := newScrapePool(config, &nopAppendable{}, 0, nil, &Options{}, nil)
 	tgts := []*targetgroup.Group{
 		{
 			Targets: []model.LabelSet{{model.AddressLabel: "127.0.0.1:9090"}},

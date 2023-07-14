@@ -82,7 +82,6 @@ var (
 
 func init() {
 	discovery.RegisterConfig(&SDConfig{})
-	prometheus.MustRegister(failuresCount)
 }
 
 // SDConfig is the configuration for Azure based service discovery.
@@ -105,7 +104,7 @@ func (*SDConfig) Name() string { return "azure" }
 
 // NewDiscoverer returns a Discoverer for the Config.
 func (c *SDConfig) NewDiscoverer(opts discovery.DiscovererOptions) (discovery.Discoverer, error) {
-	return NewDiscovery(c, opts.Logger), nil
+	return NewDiscovery(c, opts.Logger, opts.Registerer), nil
 }
 
 func validateAuthParam(param, name string) error {
@@ -155,7 +154,7 @@ type Discovery struct {
 }
 
 // NewDiscovery returns a new AzureDiscovery which periodically refreshes its targets.
-func NewDiscovery(cfg *SDConfig, logger log.Logger) *Discovery {
+func NewDiscovery(cfg *SDConfig, logger log.Logger, reg prometheus.Registerer) *Discovery {
 	if logger == nil {
 		logger = log.NewNopLogger()
 	}
@@ -170,6 +169,16 @@ func NewDiscovery(cfg *SDConfig, logger log.Logger) *Discovery {
 		time.Duration(cfg.RefreshInterval),
 		d.refresh,
 	)
+
+	if reg != nil {
+		reg.MustRegister(failuresCount)
+	} else {
+		//TODO: This is a breaking change, because if there is more than one
+		// discovery component of the same type, MustRegister will panic. Is this ok/
+		//TODO: Should we keep falling back to the default registry?
+		prometheus.MustRegister(failuresCount)
+	}
+
 	return d
 }
 

@@ -245,7 +245,7 @@ func TestDNS(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			sd := NewDiscovery(tc.config, nil)
+			sd := NewDiscovery(tc.config, nil, nil)
 			sd.lookupFn = tc.lookup
 
 			tgs, err := sd.refresh(context.Background())

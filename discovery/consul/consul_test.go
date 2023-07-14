@@ -39,7 +39,7 @@ func TestConfiguredService(t *testing.T) {
 	conf := &SDConfig{
 		Services: []string{"configuredServiceName"},
 	}
-	consulDiscovery, err := NewDiscovery(conf, nil)
+	consulDiscovery, err := NewDiscovery(conf, nil, nil)
 	if err != nil {
 		t.Errorf("Unexpected error when initializing discovery %v", err)
 	}
@@ -56,7 +56,7 @@ func TestConfiguredServiceWithTag(t *testing.T) {
 		Services:    []string{"configuredServiceName"},
 		ServiceTags: []string{"http"},
 	}
-	consulDiscovery, err := NewDiscovery(conf, nil)
+	consulDiscovery, err := NewDiscovery(conf, nil, nil)
 	if err != nil {
 		t.Errorf("Unexpected error when initializing discovery %v", err)
 	}
@@ -151,7 +151,7 @@ func TestConfiguredServiceWithTags(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		consulDiscovery, err := NewDiscovery(tc.conf, nil)
+		consulDiscovery, err := NewDiscovery(tc.conf, nil, nil)
 		if err != nil {
 			t.Errorf("Unexpected error when initializing discovery %v", err)
 		}
@@ -165,7 +165,7 @@ func TestConfiguredServiceWithTags(t *testing.T) {
 
 func TestNonConfiguredService(t *testing.T) {
 	conf := &SDConfig{}
-	consulDiscovery, err := NewDiscovery(conf, nil)
+	consulDiscovery, err := NewDiscovery(conf, nil, nil)
 	if err != nil {
 		t.Errorf("Unexpected error when initializing discovery %v", err)
 	}
@@ -262,7 +262,7 @@ func newServer(t *testing.T) (*httptest.Server, *SDConfig) {
 
 func newDiscovery(t *testing.T, config *SDConfig) *Discovery {
 	logger := log.NewNopLogger()
-	d, err := NewDiscovery(config, logger)
+	d, err := NewDiscovery(config, logger, nil)
 	require.NoError(t, err)
 	return d
 }

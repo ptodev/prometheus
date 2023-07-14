@@ -70,7 +70,6 @@ var (
 
 func init() {
 	discovery.RegisterConfig(&SDConfig{})
-	prometheus.MustRegister(dnsSDLookupFailuresCount, dnsSDLookupsCount)
 }
 
 // SDConfig is the configuration for DNS based service discovery.
@@ -86,7 +85,7 @@ func (*SDConfig) Name() string { return "dns" }
 
 // NewDiscoverer returns a Discoverer for the Config.
 func (c *SDConfig) NewDiscoverer(opts discovery.DiscovererOptions) (discovery.Discoverer, error) {
-	return NewDiscovery(*c, opts.Logger), nil
+	return NewDiscovery(*c, opts.Logger, opts.Registerer), nil
 }
 
 // UnmarshalYAML implements the yaml.Unmarshaler interface.
@@ -125,7 +124,7 @@ type Discovery struct {
 }
 
 // NewDiscovery returns a new Discovery which periodically refreshes its targets.
-func NewDiscovery(conf SDConfig, logger log.Logger) *Discovery {
+func NewDiscovery(conf SDConfig, logger log.Logger, reg prometheus.Registerer) *Discovery {
 	if logger == nil {
 		logger = log.NewNopLogger()
 	}
@@ -154,6 +153,16 @@ func NewDiscovery(conf SDConfig, logger log.Logger) *Discovery {
 		time.Duration(conf.RefreshInterval),
 		d.refresh,
 	)
+
+	if reg != nil {
+		reg.MustRegister(dnsSDLookupFailuresCount, dnsSDLookupsCount)
+	} else {
+		//TODO: This is a breaking change, because if there is more than one
+		// discovery component of the same type, MustRegister will panic. Is this ok/
+		//TODO: Should we keep falling back to the default registry?
+		prometheus.MustRegister(dnsSDLookupFailuresCount, dnsSDLookupsCount)
+	}
+
 	return d
 }
 

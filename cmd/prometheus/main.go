@@ -615,7 +615,7 @@ func main() {
 	}
 
 	var (
-		scrapeManager  = scrape.NewManager(&cfg.scrape, log.With(logger, "component", "scrape manager"), fanoutStorage)
+		scrapeManager  = scrape.NewManager(&cfg.scrape, log.With(logger, "component", "scrape manager"), fanoutStorage, prometheus.DefaultRegisterer)
 		tracingManager = tracing.NewManager(logger)
 
 		queryEngine *promql.Engine
