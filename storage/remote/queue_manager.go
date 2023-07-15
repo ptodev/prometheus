@@ -16,7 +16,9 @@ package remote
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -428,10 +430,6 @@ type QueueManager struct {
 	highestRecvTimestamp *maxTimestamp
 }
 
-var (
-	_ wlog.WriteTo = (*QueueManager)(nil)
-)
-
 // NewQueueManager builds a new QueueManager and starts a new
 // WAL watcher with queue manager as the WriteTo destination.
 // The WAL watcher takes the dir parameter as the base directory
@@ -455,7 +453,7 @@ func NewQueueManager(
 	sm ReadyScrapeManager,
 	enableExemplarRemoteWrite bool,
 	enableNativeHistogramRemoteWrite bool,
-	markerHandler MarkerHandler,
+	markerDir string,
 ) *QueueManager {
 	if logger == nil {
 		logger = log.NewNopLogger()
@@ -484,8 +482,6 @@ func NewQueueManager(
 		seriesSegmentIndexes: make(map[chunks.HeadSeriesRef]int),
 		droppedSeries:        make(map[chunks.HeadSeriesRef]struct{}),
 
-		markerHandler: markerHandler,
-
 		numShards:   cfg.MinShards,
 		reshardChan: make(chan int),
 		quit:        make(chan struct{}),
@@ -499,12 +495,18 @@ func NewQueueManager(
 		interner:             interner,
 		highestRecvTimestamp: highestRecvTimestamp,
 	}
-
 	t.watcher = wlog.NewWatcher(watcherMetrics, readerMetrics, logger, client.Name(), t, t.markerHandler, dir, enableExemplarRemoteWrite, enableNativeHistogramRemoteWrite)
 	if t.mcfg.Send {
 		t.metadataWatcher = NewMetadataWatcher(logger, sm, client.Name(), t, t.mcfg.SendInterval, flushDeadline)
 	}
 	t.shards = t.newShards()
+	// IMO we need to ensure the dir exists in another piece of the code, and handle the error there
+	err := os.MkdirAll(markerDir+client.Name(), 0o777)
+	if err != nil {
+		fmt.Println("error mkdir: ", err)
+	}
+	markerFileHandler := NewMarkerFileHandler(logger, markerDir, client.Name())
+	t.markerHandler = NewMarkerHandler(logger, client.Name(), markerFileHandler)
 
 	return t
 }
@@ -616,7 +618,7 @@ outer:
 				sType:        tSample,
 				segment:      segment,
 			}) {
-				t.markerHandler.UpdateReceivedData(segment, len(samples))
+				t.markerHandler.UpdateReceivedData(segment, 1)
 				continue outer
 			}
 
@@ -796,6 +798,7 @@ func (t *QueueManager) Start() {
 
 	t.shards.start(t.numShards)
 	t.watcher.Start()
+	t.markerHandler.Start()
 	if t.mcfg.Send {
 		t.metadataWatcher.Start()
 	}
@@ -821,6 +824,7 @@ func (t *QueueManager) Stop() {
 	if t.mcfg.Send {
 		t.metadataWatcher.Stop()
 	}
+	// we should stop the marker last so that it can update the marker based on any last batches the shards sent
 	t.markerHandler.Stop()
 
 	// On shutdown, release the strings in the labels from the intern pool.

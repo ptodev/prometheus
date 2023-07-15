@@ -16,6 +16,7 @@ package remote
 import (
 	"context"
 	"fmt"
+	"github.com/prometheus/prometheus/model/timestamp"
 	"math"
 	"os"
 	"runtime/pprof"
@@ -39,7 +40,6 @@ import (
 	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/model/textparse"
-	"github.com/prometheus/prometheus/model/timestamp"
 	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/scrape"
 	"github.com/prometheus/prometheus/tsdb/chunks"
@@ -79,7 +79,7 @@ func TestSampleDelivery(t *testing.T) {
 	n := 3
 
 	dir := t.TempDir()
-
+	fmt.Println("creating storage, dir is: ", dir)
 	s := NewStorage(nil, nil, nil, dir, defaultFlushDeadline, nil)
 	defer s.Close()
 
@@ -167,13 +167,28 @@ func TestMetadataDelivery(t *testing.T) {
 
 	dir := t.TempDir()
 
-	markerHandler := NewTestMarkerHandler(t, dir, "rw1")
-
 	cfg := config.DefaultQueueConfig
 	mcfg := config.DefaultMetadataConfig
 
 	metrics := newQueueManagerMetrics(nil, "", "")
-	m := NewQueueManager(metrics, nil, nil, nil, dir, newEWMARate(ewmaWeight, shardUpdateDuration), cfg, mcfg, labels.EmptyLabels(), nil, c, defaultFlushDeadline, newPool(), newHighestTimestampMetric(), nil, false, false, markerHandler)
+	m := NewQueueManager(metrics,
+		nil,
+		nil,
+		nil,
+		dir,
+		newEWMARate(ewmaWeight, shardUpdateDuration),
+		cfg,
+		mcfg,
+		labels.EmptyLabels(),
+		nil,
+		c,
+		defaultFlushDeadline,
+		newPool(),
+		newHighestTimestampMetric(),
+		nil,
+		false,
+		false,
+		c.Name())
 	m.Start()
 	defer m.Stop()
 
@@ -211,10 +226,25 @@ func TestSampleDeliveryTimeout(t *testing.T) {
 
 	dir := t.TempDir()
 
-	markerHandler := NewTestMarkerHandler(t, dir, "rw1")
-
 	metrics := newQueueManagerMetrics(nil, "", "")
-	m := NewQueueManager(metrics, nil, nil, nil, dir, newEWMARate(ewmaWeight, shardUpdateDuration), cfg, mcfg, labels.EmptyLabels(), nil, c, defaultFlushDeadline, newPool(), newHighestTimestampMetric(), nil, false, false, markerHandler)
+	m := NewQueueManager(metrics,
+		nil,
+		nil,
+		nil,
+		dir,
+		newEWMARate(ewmaWeight, shardUpdateDuration),
+		cfg,
+		mcfg,
+		labels.EmptyLabels(),
+		nil,
+		c,
+		defaultFlushDeadline,
+		newPool(),
+		newHighestTimestampMetric(),
+		nil,
+		false,
+		false,
+		c.Name())
 	m.StoreSeries(series, 0)
 	m.Start()
 	defer m.Stop()
@@ -254,13 +284,28 @@ func TestSampleDeliveryOrder(t *testing.T) {
 
 	dir := t.TempDir()
 
-	markerHandler := NewTestMarkerHandler(t, dir, "rw1")
-
 	cfg := config.DefaultQueueConfig
 	mcfg := config.DefaultMetadataConfig
 
 	metrics := newQueueManagerMetrics(nil, "", "")
-	m := NewQueueManager(metrics, nil, nil, nil, dir, newEWMARate(ewmaWeight, shardUpdateDuration), cfg, mcfg, labels.EmptyLabels(), nil, c, defaultFlushDeadline, newPool(), newHighestTimestampMetric(), nil, false, false, markerHandler)
+	m := NewQueueManager(metrics,
+		nil,
+		nil,
+		nil,
+		dir,
+		newEWMARate(ewmaWeight, shardUpdateDuration),
+		cfg,
+		mcfg,
+		labels.EmptyLabels(),
+		nil,
+		c,
+		defaultFlushDeadline,
+		newPool(),
+		newHighestTimestampMetric(),
+		nil,
+		false,
+		false,
+		c.Name())
 	m.StoreSeries(series, 0)
 
 	m.Start()
@@ -270,19 +315,134 @@ func TestSampleDeliveryOrder(t *testing.T) {
 	c.waitForExpectedData(t)
 }
 
+func TestSegmentMarker(t *testing.T) {
+	testcases := []struct {
+		name            string
+		samples         bool
+		exemplars       bool
+		histograms      bool
+		floatHistograms bool
+	}{
+		// todo: test with multiple data types
+		{samples: true, exemplars: false, histograms: false, floatHistograms: false, name: "samples only"},
+		//{samples: true, exemplars: true, histograms: true, floatHistograms: true, name: "samples, exemplars, and histograms"},
+		//{samples: false, exemplars: true, histograms: false, floatHistograms: false, name: "exemplars only"},
+		//{samples: false, exemplars: false, histograms: true, floatHistograms: false, name: "histograms only"},
+		//{samples: false, exemplars: false, histograms: false, floatHistograms: true, name: "float histograms only"},
+	}
+
+	// Let's create an even number of send batches so we don't run into the
+	// batch timeout case.
+	n := 3
+
+	dir := t.TempDir()
+	s := NewStorage(nil, nil, nil, dir, defaultFlushDeadline, nil)
+	defer s.Close()
+
+	queueConfig := config.DefaultQueueConfig
+	queueConfig.BatchSendDeadline = model.Duration(100 * time.Millisecond)
+	queueConfig.MaxShards = 1
+
+	// We need to set URL's so that metric creation doesn't panic.
+	writeConfig := baseRemoteWriteConfig("http://test-storage.com")
+	writeConfig.QueueConfig = queueConfig
+	writeConfig.SendExemplars = true
+	writeConfig.SendNativeHistograms = true
+
+	conf := &config.Config{
+		GlobalConfig: config.DefaultGlobalConfig,
+		RemoteWriteConfigs: []*config.RemoteWriteConfig{
+			writeConfig,
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			var (
+				series  []record.RefSeries
+				samples []record.RefSample
+				//exemplars       []record.RefExemplar
+				//histograms      []record.RefHistogramSample
+				//floatHistograms []record.RefFloatHistogramSample
+			)
+
+			// Generates same series in both cases.
+			if tc.samples {
+				samples, series = createTimeseries(n, n)
+			}
+			//if tc.exemplars {
+			//	exemplars, series = createExemplars(n, n)
+			//}
+			//if tc.histograms {
+			//	histograms, _, series = createHistograms(n, n, false)
+			//}
+			//if tc.floatHistograms {
+			//	_, floatHistograms, series = createHistograms(n, n, true)
+			//}
+
+			// Apply new config.
+			queueConfig.Capacity = len(samples)
+			queueConfig.MaxSamplesPerSend = len(samples) / 2
+			require.NoError(t, s.ApplyConfig(conf))
+			hash, err := toHash(writeConfig)
+			require.NoError(t, err)
+			qm := s.rws.queues[hash]
+
+			c := NewTestWriteClient()
+			qm.SetClient(c)
+
+			qm.StoreSeries(series, 0)
+
+			// Send first half of data.
+			c.expectSamples(samples[:len(samples)/2], series)
+			qm.Append(samples[:len(samples)/4], 0)
+			qm.Append(samples[len(samples)/4:len(samples)/2], 1)
+			c.waitForExpectedData(t)
+			// last marked segment should be 0, since we can't know for sure that we won't get more data in segment 1
+			require.Eventually(t, func() bool { return qm.markerHandler.LastMarkedSegment() == 0 }, 2*time.Second, 100*time.Millisecond, "LastMarkedSegment was never updated to the expected value: %d", 0)
+
+			// Send second half of data.
+			c.expectSamples(samples[len(samples)/2:], series)
+			//c.expectExemplars(exemplars[len(exemplars)/2:], series)
+			//c.expectHistograms(histograms[len(histograms)/2:], series)
+			//c.expectFloatHistograms(floatHistograms[len(floatHistograms)/2:], series)
+			//qm.Append(samples[len(samples)/2:], 0)
+			//qm.AppendExemplars(exemplars[len(exemplars)/2:], 0)
+			//qm.AppendHistograms(histograms[len(histograms)/2:], 0)
+			//qm.AppendFloatHistograms(floatHistograms[len(floatHistograms)/2:], 0)
+			//c.waitForExpectedData(t)
+		})
+	}
+}
+
 func TestShutdown(t *testing.T) {
 	deadline := 1 * time.Second
 	c := NewTestBlockedWriteClient()
 
 	dir := t.TempDir()
 
-	markerHandler := NewTestMarkerHandler(t, dir, "rw1")
-
 	cfg := config.DefaultQueueConfig
 	mcfg := config.DefaultMetadataConfig
 	metrics := newQueueManagerMetrics(nil, "", "")
 
-	m := NewQueueManager(metrics, nil, nil, nil, dir, newEWMARate(ewmaWeight, shardUpdateDuration), cfg, mcfg, labels.EmptyLabels(), nil, c, deadline, newPool(), newHighestTimestampMetric(), nil, false, false, markerHandler)
+	m := NewQueueManager(metrics,
+		nil,
+		nil,
+		nil,
+		dir,
+		newEWMARate(ewmaWeight, shardUpdateDuration),
+		cfg,
+		mcfg,
+		labels.EmptyLabels(),
+		nil,
+		c,
+		deadline,
+		newPool(),
+		newHighestTimestampMetric(),
+		nil,
+		false,
+		false,
+		c.Name())
 	n := 2 * config.DefaultQueueConfig.MaxSamplesPerSend
 	samples, series := createTimeseries(n, n)
 	m.StoreSeries(series, 0)
@@ -317,12 +477,27 @@ func TestSeriesReset(t *testing.T) {
 
 	dir := t.TempDir()
 
-	markerHandler := NewTestMarkerHandler(t, dir, "rw1")
-
 	cfg := config.DefaultQueueConfig
 	mcfg := config.DefaultMetadataConfig
 	metrics := newQueueManagerMetrics(nil, "", "")
-	m := NewQueueManager(metrics, nil, nil, nil, dir, newEWMARate(ewmaWeight, shardUpdateDuration), cfg, mcfg, labels.EmptyLabels(), nil, c, deadline, newPool(), newHighestTimestampMetric(), nil, false, false, markerHandler)
+	m := NewQueueManager(metrics,
+		nil,
+		nil,
+		nil,
+		dir,
+		newEWMARate(ewmaWeight, shardUpdateDuration),
+		cfg,
+		mcfg,
+		labels.EmptyLabels(),
+		nil,
+		c,
+		deadline,
+		newPool(),
+		newHighestTimestampMetric(),
+		nil,
+		false,
+		false,
+		c.Name())
 	for i := 0; i < numSegments; i++ {
 		series := []record.RefSeries{}
 		for j := 0; j < numSeries; j++ {
@@ -350,10 +525,25 @@ func TestReshard(t *testing.T) {
 
 	dir := t.TempDir()
 
-	markerHandler := NewTestMarkerHandler(t, dir, "rw1")
-
 	metrics := newQueueManagerMetrics(nil, "", "")
-	m := NewQueueManager(metrics, nil, nil, nil, dir, newEWMARate(ewmaWeight, shardUpdateDuration), cfg, mcfg, labels.EmptyLabels(), nil, c, defaultFlushDeadline, newPool(), newHighestTimestampMetric(), nil, false, false, markerHandler)
+	m := NewQueueManager(metrics,
+		nil,
+		nil,
+		nil,
+		dir,
+		newEWMARate(ewmaWeight, shardUpdateDuration),
+		cfg,
+		mcfg,
+		labels.EmptyLabels(),
+		nil,
+		c,
+		defaultFlushDeadline,
+		newPool(),
+		newHighestTimestampMetric(),
+		nil,
+		false,
+		false,
+		c.Name())
 	m.StoreSeries(series, 0)
 
 	m.Start()
@@ -389,7 +579,24 @@ func TestReshardRaceWithStop(*testing.T) {
 	go func() {
 		for {
 			metrics := newQueueManagerMetrics(nil, "", "")
-			m = NewQueueManager(metrics, nil, nil, nil, "", newEWMARate(ewmaWeight, shardUpdateDuration), cfg, mcfg, labels.EmptyLabels(), nil, c, defaultFlushDeadline, newPool(), newHighestTimestampMetric(), nil, false, false)
+			m = NewQueueManager(metrics,
+				nil,
+				nil,
+				nil,
+				"",
+				newEWMARate(ewmaWeight, shardUpdateDuration),
+				cfg,
+				mcfg,
+				labels.EmptyLabels(),
+				nil,
+				c,
+				defaultFlushDeadline,
+				newPool(),
+				newHighestTimestampMetric(),
+				nil,
+				false,
+				false,
+				c.Name())
 			m.Start()
 			h.Unlock()
 			h.Lock()
@@ -424,7 +631,24 @@ func TestReshardPartialBatch(t *testing.T) {
 	cfg.BatchSendDeadline = model.Duration(batchSendDeadline)
 
 	metrics := newQueueManagerMetrics(nil, "", "")
-	m := NewQueueManager(metrics, nil, nil, nil, t.TempDir(), newEWMARate(ewmaWeight, shardUpdateDuration), cfg, mcfg, labels.EmptyLabels(), nil, c, flushDeadline, newPool(), newHighestTimestampMetric(), nil, false, false)
+	m := NewQueueManager(metrics,
+		nil,
+		nil,
+		nil,
+		t.TempDir(),
+		newEWMARate(ewmaWeight, shardUpdateDuration),
+		cfg,
+		mcfg,
+		labels.EmptyLabels(),
+		nil,
+		c,
+		flushDeadline,
+		newPool(),
+		newHighestTimestampMetric(),
+		nil,
+		false,
+		false,
+		c.Name())
 	m.StoreSeries(series, 0)
 
 	m.Start()
@@ -469,7 +693,24 @@ func TestQueueFilledDeadlock(t *testing.T) {
 
 	metrics := newQueueManagerMetrics(nil, "", "")
 
-	m := NewQueueManager(metrics, nil, nil, nil, t.TempDir(), newEWMARate(ewmaWeight, shardUpdateDuration), cfg, mcfg, labels.EmptyLabels(), nil, c, flushDeadline, newPool(), newHighestTimestampMetric(), nil, false, false)
+	m := NewQueueManager(metrics,
+		nil,
+		nil,
+		nil,
+		t.TempDir(),
+		newEWMARate(ewmaWeight, shardUpdateDuration),
+		cfg,
+		mcfg,
+		labels.EmptyLabels(),
+		nil,
+		c,
+		flushDeadline,
+		newPool(),
+		newHighestTimestampMetric(),
+		nil,
+		false,
+		false,
+		c.Name())
 	m.StoreSeries(series, 0)
 	m.Start()
 	defer m.Stop()
@@ -496,7 +737,24 @@ func TestReleaseNoninternedString(t *testing.T) {
 	mcfg := config.DefaultMetadataConfig
 	metrics := newQueueManagerMetrics(nil, "", "")
 	c := NewTestWriteClient()
-	m := NewQueueManager(metrics, nil, nil, nil, "", newEWMARate(ewmaWeight, shardUpdateDuration), cfg, mcfg, labels.EmptyLabels(), nil, c, defaultFlushDeadline, newPool(), newHighestTimestampMetric(), nil, false, false)
+	m := NewQueueManager(metrics,
+		nil,
+		nil,
+		nil,
+		"",
+		newEWMARate(ewmaWeight, shardUpdateDuration),
+		cfg,
+		mcfg,
+		labels.EmptyLabels(),
+		nil,
+		c,
+		defaultFlushDeadline,
+		newPool(),
+		newHighestTimestampMetric(),
+		nil,
+		false,
+		false,
+		c.Name())
 	m.Start()
 	defer m.Stop()
 
@@ -543,7 +801,24 @@ func TestShouldReshard(t *testing.T) {
 	for _, c := range cases {
 		metrics := newQueueManagerMetrics(nil, "", "")
 		client := NewTestWriteClient()
-		m := NewQueueManager(metrics, nil, nil, nil, "", newEWMARate(ewmaWeight, shardUpdateDuration), cfg, mcfg, labels.EmptyLabels(), nil, client, defaultFlushDeadline, newPool(), newHighestTimestampMetric(), nil, false, false)
+		m := NewQueueManager(metrics,
+			nil,
+			nil,
+			nil,
+			"",
+			newEWMARate(ewmaWeight, shardUpdateDuration),
+			cfg,
+			mcfg,
+			labels.EmptyLabels(),
+			nil,
+			client,
+			defaultFlushDeadline,
+			newPool(),
+			newHighestTimestampMetric(),
+			nil,
+			false,
+			false,
+			client.Name())
 		m.numShards = c.startingShards
 		m.dataIn.incr(c.samplesIn)
 		m.dataOut.incr(c.samplesOut)
@@ -684,14 +959,6 @@ func NewTestWriteClient() *TestWriteClient {
 		expectedSamples:  map[string][]prompb.Sample{},
 		receivedMetadata: map[string][]prompb.MetricMetadata{},
 	}
-}
-
-func NewTestMarkerHandler(t *testing.T, walDir, markerId string) MarkerHandler {
-	//TODO: Mock the filesystem?
-	markerFileHandler, err := NewMarkerFileHandler(log.NewNopLogger(), walDir, markerId)
-	require.NoError(t, err)
-
-	return NewMarkerHandler(markerFileHandler)
 }
 
 func (c *TestWriteClient) expectSamples(ss []record.RefSample, series []record.RefSeries) {
@@ -927,7 +1194,24 @@ func BenchmarkSampleSend(b *testing.B) {
 	dir := b.TempDir()
 
 	metrics := newQueueManagerMetrics(nil, "", "")
-	m := NewQueueManager(metrics, nil, nil, nil, dir, newEWMARate(ewmaWeight, shardUpdateDuration), cfg, mcfg, labels.EmptyLabels(), nil, c, defaultFlushDeadline, newPool(), newHighestTimestampMetric(), nil, false, false)
+	m := NewQueueManager(metrics,
+		nil,
+		nil,
+		nil,
+		dir,
+		newEWMARate(ewmaWeight, shardUpdateDuration),
+		cfg,
+		mcfg,
+		labels.EmptyLabels(),
+		nil,
+		c,
+		defaultFlushDeadline,
+		newPool(),
+		newHighestTimestampMetric(),
+		nil,
+		false,
+		false,
+		c.Name())
 	m.StoreSeries(series, 0)
 
 	// These should be received by the client.
@@ -971,9 +1255,24 @@ func BenchmarkStartup(b *testing.B) {
 	for n := 0; n < b.N; n++ {
 		metrics := newQueueManagerMetrics(nil, "", "")
 		c := NewTestBlockedWriteClient()
-		m := NewQueueManager(metrics, nil, nil, logger, dir,
+		m := NewQueueManager(metrics,
+			nil,
+			nil,
+			nil,
+			"",
 			newEWMARate(ewmaWeight, shardUpdateDuration),
-			cfg, mcfg, labels.EmptyLabels(), nil, c, 1*time.Minute, newPool(), newHighestTimestampMetric(), nil, false, false)
+			cfg,
+			mcfg,
+			labels.EmptyLabels(),
+			nil,
+			c,
+			defaultFlushDeadline,
+			newPool(),
+			newHighestTimestampMetric(),
+			nil,
+			false,
+			false,
+			c.Name())
 		m.watcher.SetStartTime(timestamp.Time(math.MaxInt64))
 		m.watcher.MaxSegment = segments[len(segments)-2]
 		err := m.watcher.Run()
@@ -1054,11 +1353,26 @@ func TestCalculateDesiredShards(t *testing.T) {
 
 	dir := t.TempDir()
 
-	markerHandler := NewTestMarkerHandler(t, dir, "rw1")
-
 	metrics := newQueueManagerMetrics(nil, "", "")
 	samplesIn := newEWMARate(ewmaWeight, shardUpdateDuration)
-	m := NewQueueManager(metrics, nil, nil, nil, dir, samplesIn, cfg, mcfg, labels.EmptyLabels(), nil, c, defaultFlushDeadline, newPool(), newHighestTimestampMetric(), nil, false, false, markerHandler)
+	m := NewQueueManager(metrics,
+		nil,
+		nil,
+		nil,
+		dir,
+		samplesIn,
+		cfg,
+		mcfg,
+		labels.EmptyLabels(),
+		nil,
+		c,
+		defaultFlushDeadline,
+		newPool(),
+		newHighestTimestampMetric(),
+		nil,
+		false,
+		false,
+		c.Name())
 
 	// Need to start the queue manager so the proper metrics are initialized.
 	// However we can stop it right away since we don't need to do any actual
@@ -1133,11 +1447,26 @@ func TestCalculateDesiredShardsDetail(t *testing.T) {
 
 	dir := t.TempDir()
 
-	markerHandler := NewTestMarkerHandler(t, dir, "rw1")
-
 	metrics := newQueueManagerMetrics(nil, "", "")
 	samplesIn := newEWMARate(ewmaWeight, shardUpdateDuration)
-	m := NewQueueManager(metrics, nil, nil, nil, dir, samplesIn, cfg, mcfg, labels.EmptyLabels(), nil, c, defaultFlushDeadline, newPool(), newHighestTimestampMetric(), nil, false, false, markerHandler)
+	m := NewQueueManager(metrics,
+		nil,
+		nil,
+		nil,
+		dir,
+		samplesIn,
+		cfg,
+		mcfg,
+		labels.EmptyLabels(),
+		nil,
+		c,
+		defaultFlushDeadline,
+		newPool(),
+		newHighestTimestampMetric(),
+		nil,
+		false,
+		false,
+		c.Name())
 
 	for _, tc := range []struct {
 		name            string

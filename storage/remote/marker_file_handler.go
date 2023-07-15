@@ -2,7 +2,6 @@ package remote
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,47 +14,44 @@ import (
 
 type MarkerFileHandler interface {
 	wlog.Marker
-	MarkSegment(segment int)
+	MarkSegment(segment int) error
 	Stop()
 }
 
 type markerFileHandler struct {
 	segmentToMark chan int
 	quit          chan struct{}
+	dir           string
 
 	logger log.Logger
 
 	lastMarkedSegmentFilePath string
 }
 
-var (
-	_ MarkerFileHandler = (*markerFileHandler)(nil)
-)
-
-func NewMarkerFileHandler(logger log.Logger, walDir, markerId string) (MarkerFileHandler, error) {
-	markerDir := filepath.Join(walDir, "remote", markerId)
-
-	dir := filepath.Join(walDir, "remote", markerId)
-	if err := os.MkdirAll(dir, 0o777); err != nil {
-		return nil, fmt.Errorf("error creating segment marker folder %q: %w", dir, err)
-	}
+func NewMarkerFileHandler(logger log.Logger, dir, markerId string) MarkerFileHandler {
+	//dir := filepath.Join(walDir, "remote", markerId)
 
 	mfh := &markerFileHandler{
 		segmentToMark:             make(chan int, 1),
 		quit:                      make(chan struct{}),
 		logger:                    logger,
-		lastMarkedSegmentFilePath: filepath.Join(markerDir, "segment"),
+		dir:                       dir,
+		lastMarkedSegmentFilePath: filepath.Join(dir, "segment"),
 	}
 
 	//TODO: Should this be in a separate Start() function?
-	go mfh.markSegmentAsync()
+	//go mfh.markSegmentAsync()
 
-	return mfh, nil
+	return mfh
 }
+
+//func (mfh *markerFileHandler) Start() {
+//	go mfh.markSegmentAsync()
+//}
 
 // LastMarkedSegment implements wlog.Marker.
 func (mfh *markerFileHandler) LastMarkedSegment() int {
-	bb, err := ioutil.ReadFile(mfh.lastMarkedSegmentFilePath)
+	bb, err := os.ReadFile(mfh.lastMarkedSegmentFilePath)
 	if os.IsNotExist(err) {
 		level.Warn(mfh.logger).Log("msg", "marker segment file does not exist", "file", mfh.lastMarkedSegmentFilePath)
 		return -1
@@ -79,7 +75,7 @@ func (mfh *markerFileHandler) LastMarkedSegment() int {
 }
 
 // MarkSegment implements MarkerHandler.
-func (mfh *markerFileHandler) MarkSegment(segment int) {
+func (mfh *markerFileHandler) MarkSegment(segment int) error {
 	var (
 		segmentText = strconv.Itoa(segment)
 		tmp         = mfh.lastMarkedSegmentFilePath + ".tmp"
@@ -87,46 +83,50 @@ func (mfh *markerFileHandler) MarkSegment(segment int) {
 
 	if err := os.WriteFile(tmp, []byte(segmentText), 0o666); err != nil {
 		level.Error(mfh.logger).Log("msg", "could not create segment marker file", "file", tmp, "err", err)
-		return
+		return err
 	}
 	if err := fileutil.Replace(tmp, mfh.lastMarkedSegmentFilePath); err != nil {
 		level.Error(mfh.logger).Log("msg", "could not replace segment marker file", "file", mfh.lastMarkedSegmentFilePath, "err", err)
-		return
+		return err
 	}
 
 	level.Debug(mfh.logger).Log("msg", "updated segment marker file", "file", mfh.lastMarkedSegmentFilePath, "segment", segment)
+	return fmt.Errorf("hello")
 }
 
 // Stop implements MarkerHandler.
 func (mfh *markerFileHandler) Stop() {
 	level.Debug(mfh.logger).Log("msg", "waiting for marker file handler to shut down...")
-	mfh.quit <- struct{}{}
+	//mfh.quit <- struct{}{}
 }
 
-func (mfh *markerFileHandler) markSegmentAsync() {
-	for {
-		select {
-		case segmentToMark := <-mfh.segmentToMark:
-			if segmentToMark >= 0 {
-				var (
-					segmentText = strconv.Itoa(segmentToMark)
-					tmp         = mfh.lastMarkedSegmentFilePath + ".tmp"
-				)
-
-				if err := os.WriteFile(tmp, []byte(segmentText), 0o666); err != nil {
-					level.Error(mfh.logger).Log("msg", "could not create segment marker file", "file", tmp, "err", err)
-					return
-				}
-				if err := fileutil.Replace(tmp, mfh.lastMarkedSegmentFilePath); err != nil {
-					level.Error(mfh.logger).Log("msg", "could not replace segment marker file", "file", mfh.lastMarkedSegmentFilePath, "err", err)
-					return
-				}
-
-				level.Debug(mfh.logger).Log("msg", "updated segment marker file", "file", mfh.lastMarkedSegmentFilePath, "segment", segmentToMark)
-			}
-		case <-mfh.quit:
-			level.Debug(mfh.logger).Log("msg", "quitting marker handler")
-			return
-		}
-	}
-}
+//
+//func (mfh *markerFileHandler) markSegmentAsync() {
+//	for {
+//		select {
+//		case segmentToMark := <-mfh.segmentToMark:
+//			fmt.Println("got message to mark a file: ", segmentToMark)
+//			if segmentToMark >= 0 {
+//				var (
+//					segmentText = strconv.Itoa(segmentToMark)
+//					tmp         = mfh.lastMarkedSegmentFilePath + ".tmp"
+//				)
+//
+//				if err := os.WriteFile(tmp, []byte(segmentText), 0o666); err != nil {
+//					fmt.Println("error: ", err)
+//					level.Error(mfh.logger).Log("msg", "could not create segment marker file", "file", tmp, "err", err)
+//					return
+//				}
+//				if err := fileutil.Replace(tmp, mfh.lastMarkedSegmentFilePath); err != nil {
+//					level.Error(mfh.logger).Log("msg", "could not replace segment marker file", "file", mfh.lastMarkedSegmentFilePath, "err", err)
+//					return
+//				}
+//
+//				level.Debug(mfh.logger).Log("msg", "updated segment marker file", "file", mfh.lastMarkedSegmentFilePath, "segment", segmentToMark)
+//			}
+//		case <-mfh.quit:
+//			level.Debug(mfh.logger).Log("msg", "quitting marker handler")
+//			return
+//		}
+//	}
+//}
