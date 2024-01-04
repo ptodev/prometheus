@@ -39,18 +39,16 @@ type Discoverer interface {
 	Run(ctx context.Context, up chan<- []*targetgroup.Group)
 }
 
+type DiscovererDebugMetrics interface {
+	Register() error
+	Unregister()
+}
+
 // DiscovererOptions provides options for a Discoverer.
 type DiscovererOptions struct {
 	Logger log.Logger
 
-	// A registerer for the Discoverer's metrics.
-	// Some Discoverers may ignore this registerer and use the global one instead.
-	// For now this will work, because the Prometheus `main` function uses the global registry.
-	// However, in the future the Prometheus `main` function will be updated to not use the global registry.
-	// Hence, if a discoverer wants its metrics to be visible via the Prometheus executable's
-	// `/metrics` endpoint, it should use this explicit registerer.
-	// TODO(ptodev): Update this comment once the Prometheus `main` function does not use the global registry.
-	Registerer prometheus.Registerer
+	DebugMetrics DiscovererDebugMetrics
 
 	// Extra HTTP client options to expose to Discoverers. This field may be
 	// ignored; Discoverer implementations must opt-in to reading it.
@@ -65,6 +63,8 @@ type Config interface {
 	// NewDiscoverer returns a Discoverer for the Config
 	// with the given DiscovererOptions.
 	NewDiscoverer(DiscovererOptions) (Discoverer, error)
+
+	NewDiscovererDebugMetrics(prometheus.Registerer) DiscovererDebugMetrics
 }
 
 // Configs is a slice of Config values that uses custom YAML marshaling and unmarshaling
@@ -117,6 +117,11 @@ func (StaticConfig) Name() string { return "static" }
 // NewDiscoverer returns a Discoverer for the Config.
 func (c StaticConfig) NewDiscoverer(DiscovererOptions) (Discoverer, error) {
 	return staticDiscoverer(c), nil
+}
+
+// No metrics are needed for this service discovery mechanism.
+func (c StaticConfig) NewDiscovererDebugMetrics(prometheus.Registerer) DiscovererDebugMetrics {
+	return nil
 }
 
 type staticDiscoverer []*targetgroup.Group

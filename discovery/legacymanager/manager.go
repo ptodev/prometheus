@@ -69,6 +69,16 @@ func NewManager(ctx context.Context, logger log.Logger, registerer prometheus.Re
 		return nil
 	}
 
+	for confName, conf := range configNames {
+		currentSdMetrics := conf.NewDiscovererDebugMetrics(registerer)
+		err := currentSdMetrics.Register()
+		if err != nil {
+			level.Error(logger).Log("msg", "Failed to create service discovery metrics", "err", err, "type", confName)
+			return nil
+		}
+		mgr.sdMetrics[conf.Name()] = currentSdMetrics
+	}
+
 	return mgr
 }
 
@@ -108,7 +118,8 @@ type Manager struct {
 	// A registerer for all service discovery metrics.
 	registerer prometheus.Registerer
 
-	metrics *discovery.Metrics
+	metrics   *discovery.Metrics
+	sdMetrics map[string]discovery.DiscovererDebugMetrics
 }
 
 // Run starts the background processing.
@@ -116,6 +127,12 @@ func (m *Manager) Run() error {
 	go m.sender()
 	<-m.ctx.Done()
 	m.cancelDiscoverers()
+
+	//TODO: Wait for the discoverers to stop before unregistering their metrics.
+	for _, sdMetric := range m.sdMetrics {
+		sdMetric.Unregister()
+	}
+
 	return m.ctx.Err()
 }
 
@@ -283,8 +300,8 @@ func (m *Manager) registerProviders(cfgs discovery.Configs, setName string) int 
 		}
 		typ := cfg.Name()
 		d, err := cfg.NewDiscoverer(discovery.DiscovererOptions{
-			Logger:     log.With(m.logger, "discovery", typ, "config", setName),
-			Registerer: m.registerer,
+			Logger:       log.With(m.logger, "discovery", typ, "config", setName),
+			DebugMetrics: m.sdMetrics[typ],
 		})
 		if err != nil {
 			level.Error(m.logger).Log("msg", "Cannot create service discovery", "err", err, "type", typ, "config", setName)
