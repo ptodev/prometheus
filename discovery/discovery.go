@@ -55,6 +55,20 @@ type DiscovererOptions struct {
 	HTTPClientOptions []config.HTTPClientOption
 }
 
+type RefreshDebugMetrics struct {
+	Failures prometheus.Counter
+	Duration prometheus.Observer
+}
+
+type RefreshDebugMetricsInstantiator interface {
+	Instantiate(mech string) *RefreshDebugMetrics
+}
+
+type RefreshDebugMetricsManager interface {
+	DiscovererDebugMetrics
+	RefreshDebugMetricsInstantiator
+}
+
 // A Config provides the configuration and constructor for a Discoverer.
 type Config interface {
 	// Name returns the name of the discovery mechanism.
@@ -64,7 +78,7 @@ type Config interface {
 	// with the given DiscovererOptions.
 	NewDiscoverer(DiscovererOptions) (Discoverer, error)
 
-	NewDiscovererDebugMetrics(prometheus.Registerer) DiscovererDebugMetrics
+	NewDiscovererDebugMetrics(prometheus.Registerer, RefreshDebugMetricsInstantiator) DiscovererDebugMetrics
 }
 
 // Configs is a slice of Config values that uses custom YAML marshaling and unmarshaling
@@ -120,8 +134,8 @@ func (c StaticConfig) NewDiscoverer(DiscovererOptions) (Discoverer, error) {
 }
 
 // No metrics are needed for this service discovery mechanism.
-func (c StaticConfig) NewDiscovererDebugMetrics(prometheus.Registerer) DiscovererDebugMetrics {
-	return nil
+func (c StaticConfig) NewDiscovererDebugMetrics(prometheus.Registerer, RefreshDebugMetricsInstantiator) DiscovererDebugMetrics {
+	return &NoopDiscovererDebugMetrics{}
 }
 
 type staticDiscoverer []*targetgroup.Group

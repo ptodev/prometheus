@@ -63,12 +63,17 @@ type SDConfig struct {
 	robotEndpoint   string         // For tests only.
 }
 
+// NewDiscovererDebugMetrics implements discovery.Config.
+func (*SDConfig) NewDiscovererDebugMetrics(reg prometheus.Registerer, rdmm discovery.RefreshDebugMetricsInstantiator) discovery.DiscovererDebugMetrics {
+	return newDiscovererDebugMetrics(reg, rdmm)
+}
+
 // Name returns the name of the Config.
 func (*SDConfig) Name() string { return "hetzner" }
 
 // NewDiscoverer returns a Discoverer for the Config.
 func (c *SDConfig) NewDiscoverer(opts discovery.DiscovererOptions) (discovery.Discoverer, error) {
-	return NewDiscovery(c, opts.Logger, opts.Registerer)
+	return NewDiscovery(c, opts.Logger, opts.DebugMetrics)
 }
 
 type refresher interface {
@@ -128,7 +133,11 @@ type Discovery struct {
 }
 
 // NewDiscovery returns a new Discovery which periodically refreshes its targets.
-func NewDiscovery(conf *SDConfig, logger log.Logger, reg prometheus.Registerer) (*refresh.Discovery, error) {
+func NewDiscovery(conf *SDConfig, logger log.Logger, metrics discovery.DiscovererDebugMetrics) (*refresh.Discovery, error) {
+	m, err := convertToHetznerMetrics(metrics)
+	if err != nil {
+		return nil, err
+	}
 	r, err := newRefresher(conf, logger)
 	if err != nil {
 		return nil, err
@@ -136,11 +145,10 @@ func NewDiscovery(conf *SDConfig, logger log.Logger, reg prometheus.Registerer) 
 
 	return refresh.NewDiscovery(
 		refresh.Options{
-			Logger:   logger,
-			Mech:     "hetzner",
-			Interval: time.Duration(conf.RefreshInterval),
-			RefreshF: r.refresh,
-			Registry: reg,
+			Logger:              logger,
+			Interval:            time.Duration(conf.RefreshInterval),
+			RefreshF:            r.refresh,
+			MetricsInstantiator: m.refreshMetrics,
 		},
 	), nil
 }

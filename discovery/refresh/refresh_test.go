@@ -66,13 +66,17 @@ func TestRefresh(t *testing.T) {
 		return nil, fmt.Errorf("some error")
 	}
 	interval := time.Millisecond
+
+	metrics := NewDiscovererDebugMetrics(prometheus.NewRegistry(), "test")
+	require.NoError(t, metrics.Register())
+	defer metrics.Unregister()
+
 	d := NewDiscovery(
 		Options{
 			Logger:   nil,
-			Mech:     "test",
 			Interval: interval,
 			RefreshF: refresh,
-			Registry: prometheus.NewRegistry(),
+			Metrics:  metrics,
 		},
 	)
 

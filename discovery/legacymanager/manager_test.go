@@ -665,7 +665,11 @@ func TestTargetUpdatesOrder(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			discoveryManager := NewManager(ctx, log.NewNopLogger(), prometheus.NewRegistry())
+			reg := prometheus.NewRegistry()
+			sdMetrics, err := RegisterSDMetrics(reg)
+			require.NoError(t, err)
+
+			discoveryManager := NewManager(ctx, log.NewNopLogger(), reg, sdMetrics)
 			require.NotNil(t, discoveryManager)
 			discoveryManager.updatert = 100 * time.Millisecond
 
@@ -748,7 +752,12 @@ func verifyPresence(t *testing.T, tSets map[poolKey]map[string]*targetgroup.Grou
 func TestTargetSetRecreatesTargetGroupsEveryRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	discoveryManager := NewManager(ctx, log.NewNopLogger(), prometheus.NewRegistry())
+
+	reg := prometheus.NewRegistry()
+	sdMetrics, err := RegisterSDMetrics(reg)
+	require.NoError(t, err)
+
+	discoveryManager := NewManager(ctx, log.NewNopLogger(), reg, sdMetrics)
 	require.NotNil(t, discoveryManager)
 	discoveryManager.updatert = 100 * time.Millisecond
 	go discoveryManager.Run()
@@ -777,7 +786,12 @@ func TestTargetSetRecreatesTargetGroupsEveryRun(t *testing.T) {
 func TestDiscovererConfigs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	discoveryManager := NewManager(ctx, log.NewNopLogger(), prometheus.NewRegistry())
+
+	reg := prometheus.NewRegistry()
+	sdMetrics, err := RegisterSDMetrics(reg)
+	require.NoError(t, err)
+
+	discoveryManager := NewManager(ctx, log.NewNopLogger(), reg, sdMetrics)
 	require.NotNil(t, discoveryManager)
 	discoveryManager.updatert = 100 * time.Millisecond
 	go discoveryManager.Run()
@@ -802,7 +816,12 @@ func TestDiscovererConfigs(t *testing.T) {
 func TestTargetSetRecreatesEmptyStaticConfigs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	discoveryManager := NewManager(ctx, log.NewNopLogger(), prometheus.NewRegistry())
+
+	reg := prometheus.NewRegistry()
+	sdMetrics, err := RegisterSDMetrics(reg)
+	require.NoError(t, err)
+
+	discoveryManager := NewManager(ctx, log.NewNopLogger(), reg, sdMetrics)
 	require.NotNil(t, discoveryManager)
 	discoveryManager.updatert = 100 * time.Millisecond
 	go discoveryManager.Run()
@@ -842,7 +861,12 @@ func TestTargetSetRecreatesEmptyStaticConfigs(t *testing.T) {
 func TestIdenticalConfigurationsAreCoalesced(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	discoveryManager := NewManager(ctx, nil, prometheus.NewRegistry())
+
+	reg := prometheus.NewRegistry()
+	sdMetrics, err := RegisterSDMetrics(reg)
+	require.NoError(t, err)
+
+	discoveryManager := NewManager(ctx, nil, reg, sdMetrics)
 	require.NotNil(t, discoveryManager)
 	discoveryManager.updatert = 100 * time.Millisecond
 	go discoveryManager.Run()
@@ -874,7 +898,12 @@ func TestApplyConfigDoesNotModifyStaticTargets(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	discoveryManager := NewManager(ctx, log.NewNopLogger(), prometheus.NewRegistry())
+
+	reg := prometheus.NewRegistry()
+	sdMetrics, err := RegisterSDMetrics(reg)
+	require.NoError(t, err)
+
+	discoveryManager := NewManager(ctx, log.NewNopLogger(), reg, sdMetrics)
 	require.NotNil(t, discoveryManager)
 	discoveryManager.updatert = 100 * time.Millisecond
 	go discoveryManager.Run()
@@ -897,10 +926,20 @@ func (e errorConfig) NewDiscoverer(discovery.DiscovererOptions) (discovery.Disco
 	return nil, e.err
 }
 
+// NewDiscovererDebugMetrics implements discovery.Config.
+func (errorConfig) newDiscovererDebugMetrics(reg prometheus.Registerer, rdmm discovery.RefreshDebugMetricsInstantiator) discovery.DiscovererDebugMetrics {
+	return &discovery.NoopDiscovererDebugMetrics{}
+}
+
 func TestGaugeFailedConfigs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	discoveryManager := NewManager(ctx, log.NewNopLogger(), prometheus.NewRegistry())
+
+	reg := prometheus.NewRegistry()
+	sdMetrics, err := RegisterSDMetrics(reg)
+	require.NoError(t, err)
+
+	discoveryManager := NewManager(ctx, log.NewNopLogger(), reg, sdMetrics)
 	require.NotNil(t, discoveryManager)
 	discoveryManager.updatert = 100 * time.Millisecond
 	go discoveryManager.Run()
@@ -1057,7 +1096,11 @@ func TestCoordinationWithReceiver(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			mgr := NewManager(ctx, nil, prometheus.NewRegistry())
+			reg := prometheus.NewRegistry()
+			sdMetrics, err := RegisterSDMetrics(reg)
+			require.NoError(t, err)
+
+			mgr := NewManager(ctx, nil, reg, sdMetrics)
 			require.NotNil(t, mgr)
 			mgr.updatert = updateDelay
 			go mgr.Run()

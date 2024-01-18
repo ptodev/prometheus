@@ -39,7 +39,11 @@ host: %s
 	var cfg DockerSwarmSDConfig
 	require.NoError(t, yaml.Unmarshal([]byte(cfgString), &cfg))
 
-	d, err := NewDiscovery(&cfg, log.NewNopLogger(), prometheus.NewRegistry())
+	metrics := cfg.NewDiscovererDebugMetrics(prometheus.NewRegistry())
+	require.NoError(t, metrics.Register())
+	defer metrics.Unregister()
+
+	d, err := NewDiscovery(&cfg, log.NewNopLogger(), metrics)
 	require.NoError(t, err)
 
 	ctx := context.Background()

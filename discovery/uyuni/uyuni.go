@@ -111,12 +111,17 @@ type Discovery struct {
 	logger          log.Logger
 }
 
+// NewDiscovererDebugMetrics implements discovery.Config.
+func (*SDConfig) NewDiscovererDebugMetrics(reg prometheus.Registerer, rdmm discovery.RefreshDebugMetricsInstantiator) discovery.DiscovererDebugMetrics {
+	return newDiscovererDebugMetrics(reg, rdmm)
+}
+
 // Name returns the name of the Config.
 func (*SDConfig) Name() string { return "uyuni" }
 
 // NewDiscoverer returns a Discoverer for the Config.
 func (c *SDConfig) NewDiscoverer(opts discovery.DiscovererOptions) (discovery.Discoverer, error) {
-	return NewDiscovery(c, opts.Logger, opts.Registerer)
+	return NewDiscovery(c, opts.Logger, opts.DebugMetrics)
 }
 
 // SetDirectory joins any relative file paths with dir.
@@ -204,7 +209,12 @@ func getEndpointInfoForSystems(
 }
 
 // NewDiscovery returns a uyuni discovery for the given configuration.
-func NewDiscovery(conf *SDConfig, logger log.Logger, reg prometheus.Registerer) (*Discovery, error) {
+func NewDiscovery(conf *SDConfig, logger log.Logger, metrics discovery.DiscovererDebugMetrics) (*Discovery, error) {
+	m, err := convertToUyuniMetrics(metrics)
+	if err != nil {
+		return nil, err
+	}
+
 	apiURL, err := url.Parse(conf.Server)
 	if err != nil {
 		return nil, err
@@ -229,11 +239,10 @@ func NewDiscovery(conf *SDConfig, logger log.Logger, reg prometheus.Registerer) 
 
 	d.Discovery = refresh.NewDiscovery(
 		refresh.Options{
-			Logger:   logger,
-			Mech:     "uyuni",
-			Interval: time.Duration(conf.RefreshInterval),
-			RefreshF: d.refresh,
-			Registry: reg,
+			Logger:              logger,
+			Interval:            time.Duration(conf.RefreshInterval),
+			RefreshF:            d.refresh,
+			MetricsInstantiator: m.refreshMetrics,
 		},
 	)
 	return d, nil

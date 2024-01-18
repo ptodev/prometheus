@@ -78,12 +78,22 @@ func CheckSD(sdConfigFiles, sdJobName string, sdTimeout time.Duration, noDefault
 	defer cancel()
 
 	for _, cfg := range scrapeConfig.ServiceDiscoveryConfigs {
-		d, err := cfg.NewDiscoverer(discovery.DiscovererOptions{Logger: logger, Registerer: registerer})
+		metrics := cfg.NewDiscovererDebugMetrics(prometheus.NewRegistry())
+		err := metrics.Register()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Cannot load scrape configs", err)
+			return failureExitCode
+		}
+
+		d, err := cfg.NewDiscoverer(discovery.DiscovererOptions{Logger: logger, DebugMetrics: metrics})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Could not create new discoverer", err)
 			return failureExitCode
 		}
-		go d.Run(ctx, targetGroupChan)
+		go func() {
+			d.Run(ctx, targetGroupChan)
+			metrics.Unregister()
+		}()
 	}
 
 	var targetGroups []*targetgroup.Group

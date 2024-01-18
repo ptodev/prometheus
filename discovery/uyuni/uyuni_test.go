@@ -37,7 +37,14 @@ func testUpdateServices(respHandler http.HandlerFunc) ([]*targetgroup.Group, err
 		Server: ts.URL,
 	}
 
-	md, err := NewDiscovery(&conf, nil, prometheus.NewRegistry())
+	metrics := conf.NewDiscovererDebugMetrics(prometheus.NewRegistry())
+	err := metrics.Register()
+	if err != nil {
+		return nil, err
+	}
+	defer metrics.Unregister()
+
+	md, err := NewDiscovery(&conf, nil, metrics)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +117,11 @@ func TestUyuniSDSkipLogin(t *testing.T) {
 		Server: ts.URL,
 	}
 
-	md, err := NewDiscovery(&conf, nil, prometheus.NewRegistry())
+	metrics := conf.NewDiscovererDebugMetrics(prometheus.NewRegistry())
+	require.NoError(t, metrics.Register())
+	defer metrics.Unregister()
+
+	md, err := NewDiscovery(&conf, nil, metrics)
 	if err != nil {
 		t.Error(err)
 	}

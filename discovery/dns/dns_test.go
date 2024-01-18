@@ -253,13 +253,19 @@ func TestDNS(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			sd, err := NewDiscovery(tc.config, nil, prometheus.NewRegistry())
+
+			metrics := tc.config.NewDiscovererDebugMetrics(prometheus.NewRegistry())
+			require.NoError(t, metrics.Register())
+
+			sd, err := NewDiscovery(tc.config, nil, metrics)
 			require.NoError(t, err)
 			sd.lookupFn = tc.lookup
 
 			tgs, err := sd.refresh(context.Background())
 			require.NoError(t, err)
 			require.Equal(t, tc.expected, tgs)
+
+			metrics.Unregister()
 		})
 	}
 }

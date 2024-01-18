@@ -70,12 +70,17 @@ type Filter struct {
 	Values []string `yaml:"values"`
 }
 
+// NewDiscovererDebugMetrics implements discovery.Config.
+func (*DockerSwarmSDConfig) newDiscovererDebugMetrics(reg prometheus.Registerer, rdmm discovery.RefreshDebugMetricsInstantiator) discovery.DiscovererDebugMetrics {
+	return newDiscovererDebugMetricsDockerswarm(reg)
+}
+
 // Name returns the name of the Config.
 func (*DockerSwarmSDConfig) Name() string { return "dockerswarm" }
 
 // NewDiscoverer returns a Discoverer for the Config.
 func (c *DockerSwarmSDConfig) NewDiscoverer(opts discovery.DiscovererOptions) (discovery.Discoverer, error) {
-	return NewDiscovery(c, opts.Logger, opts.Registerer)
+	return NewDiscovery(c, opts.Logger, opts.DebugMetrics)
 }
 
 // SetDirectory joins any relative file paths with dir.
@@ -118,8 +123,11 @@ type Discovery struct {
 }
 
 // NewDiscovery returns a new Discovery which periodically refreshes its targets.
-func NewDiscovery(conf *DockerSwarmSDConfig, logger log.Logger, reg prometheus.Registerer) (*Discovery, error) {
-	var err error
+func NewDiscovery(conf *DockerSwarmSDConfig, logger log.Logger, metrics discovery.DiscovererDebugMetrics) (*Discovery, error) {
+	m, err := convertToDockerswarmMetrics(metrics)
+	if err != nil {
+		return nil, err
+	}
 
 	d := &Discovery{
 		port: conf.Port,
@@ -170,11 +178,10 @@ func NewDiscovery(conf *DockerSwarmSDConfig, logger log.Logger, reg prometheus.R
 
 	d.Discovery = refresh.NewDiscovery(
 		refresh.Options{
-			Logger:   logger,
-			Mech:     "dockerswarm",
-			Interval: time.Duration(conf.RefreshInterval),
-			RefreshF: d.refresh,
-			Registry: reg,
+			Logger:              logger,
+			Interval:            time.Duration(conf.RefreshInterval),
+			RefreshF:            d.refresh,
+			MetricsInstantiator: m.refreshMetrics,
 		},
 	)
 	return d, nil

@@ -38,7 +38,11 @@ host: %s
 	var cfg DockerSDConfig
 	require.NoError(t, yaml.Unmarshal([]byte(cfgString), &cfg))
 
-	d, err := NewDockerDiscovery(&cfg, log.NewNopLogger(), prometheus.NewRegistry())
+	metrics := cfg.NewDiscovererDebugMetrics(prometheus.NewRegistry())
+	require.NoError(t, metrics.Register())
+	defer metrics.Unregister()
+
+	d, err := NewDockerDiscovery(&cfg, log.NewNopLogger(), metrics)
 	require.NoError(t, err)
 
 	ctx := context.Background()

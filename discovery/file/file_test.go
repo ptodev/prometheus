@@ -144,19 +144,26 @@ func (t *testRunner) run(files ...string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancelSD = cancel
 	go func() {
+		conf := &SDConfig{
+			Files: files,
+			// Setting a high refresh interval to make sure that the tests only
+			// rely on file watches.
+			RefreshInterval: model.Duration(1 * time.Hour),
+		}
+
+		metrics := conf.NewDiscovererDebugMetrics(prometheus.NewRegistry())
+		require.NoError(t, metrics.Register())
+
 		d, err := NewDiscovery(
-			&SDConfig{
-				Files: files,
-				// Setting a high refresh interval to make sure that the tests only
-				// rely on file watches.
-				RefreshInterval: model.Duration(1 * time.Hour),
-			},
+			conf,
 			nil,
-			prometheus.NewRegistry(),
+			metrics,
 		)
 		require.NoError(t, err)
 
 		d.Run(ctx, t.ch)
+
+		metrics.Unregister()
 	}()
 }
 

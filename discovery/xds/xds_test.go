@@ -133,12 +133,17 @@ func TestPollingRefreshSkipUpdate(t *testing.T) {
 			return nil, nil
 		},
 	}
+
+	cfg := &SDConfig{}
+	metrics := cfg.NewDiscovererDebugMetrics(prometheus.NewRegistry())
+	require.NoError(t, metrics.Register())
+	xdsMetrics, err := convertToxdsMetrics(metrics)
+	require.NoError(t, err)
+
 	pd := &fetchDiscovery{
-		client:               rc,
-		logger:               nopLogger,
-		fetchDuration:        testFetchDuration,
-		fetchFailuresCount:   testFetchFailuresCount,
-		fetchSkipUpdateCount: testFetchSkipUpdateCount,
+		client:  rc,
+		logger:  nopLogger,
+		metrics: xdsMetrics,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -155,6 +160,8 @@ func TestPollingRefreshSkipUpdate(t *testing.T) {
 	case <-ch:
 		require.Fail(t, "no update expected")
 	}
+
+	metrics.Unregister()
 }
 
 func TestPollingRefreshAttachesGroupMetadata(t *testing.T) {
@@ -168,12 +175,9 @@ func TestPollingRefreshAttachesGroupMetadata(t *testing.T) {
 		},
 	}
 	pd := &fetchDiscovery{
-		source:               source,
-		client:               rc,
-		logger:               nopLogger,
-		fetchDuration:        testFetchDuration,
-		fetchFailuresCount:   testFetchFailuresCount,
-		fetchSkipUpdateCount: testFetchSkipUpdateCount,
+		source: source,
+		client: rc,
+		logger: nopLogger,
 		parseResources: constantResourceParser([]model.LabelSet{
 			{
 				"__meta_custom_xds_label": "a-value",
@@ -244,13 +248,10 @@ func TestPollingDisappearingTargets(t *testing.T) {
 	}
 
 	pd := &fetchDiscovery{
-		source:               source,
-		client:               rc,
-		logger:               nopLogger,
-		fetchDuration:        testFetchDuration,
-		fetchFailuresCount:   testFetchFailuresCount,
-		fetchSkipUpdateCount: testFetchSkipUpdateCount,
-		parseResources:       parser,
+		source:         source,
+		client:         rc,
+		logger:         nopLogger,
+		parseResources: parser,
 	}
 
 	ch := make(chan []*targetgroup.Group, 1)

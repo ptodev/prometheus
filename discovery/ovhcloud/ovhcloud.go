@@ -53,6 +53,11 @@ type SDConfig struct {
 	Service           string         `yaml:"service"`
 }
 
+// NewDiscovererDebugMetrics implements discovery.Config.
+func (*SDConfig) NewDiscovererDebugMetrics(reg prometheus.Registerer, rdmm discovery.RefreshDebugMetricsInstantiator) discovery.DiscovererDebugMetrics {
+	return newDiscovererDebugMetrics(reg, rdmm)
+}
+
 // Name implements the Discoverer interface.
 func (c SDConfig) Name() string {
 	return "ovhcloud"
@@ -94,7 +99,7 @@ func createClient(config *SDConfig) (*ovh.Client, error) {
 
 // NewDiscoverer returns a Discoverer for the Config.
 func (c *SDConfig) NewDiscoverer(options discovery.DiscovererOptions) (discovery.Discoverer, error) {
-	return NewDiscovery(c, options.Logger, options.Registerer)
+	return NewDiscovery(c, options.Logger, options.DebugMetrics)
 }
 
 func init() {
@@ -141,7 +146,12 @@ func newRefresher(conf *SDConfig, logger log.Logger) (refresher, error) {
 }
 
 // NewDiscovery returns a new OVHcloud Discoverer which periodically refreshes its targets.
-func NewDiscovery(conf *SDConfig, logger log.Logger, reg prometheus.Registerer) (*refresh.Discovery, error) {
+func NewDiscovery(conf *SDConfig, logger log.Logger, metrics discovery.DiscovererDebugMetrics) (*refresh.Discovery, error) {
+	m, err := convertToOvhcloudMetrics(metrics)
+	if err != nil {
+		return nil, err
+	}
+
 	r, err := newRefresher(conf, logger)
 	if err != nil {
 		return nil, err
@@ -149,11 +159,10 @@ func NewDiscovery(conf *SDConfig, logger log.Logger, reg prometheus.Registerer) 
 
 	return refresh.NewDiscovery(
 		refresh.Options{
-			Logger:   logger,
-			Mech:     "ovhcloud",
-			Interval: time.Duration(conf.RefreshInterval),
-			RefreshF: r.refresh,
-			Registry: reg,
+			Logger:              logger,
+			Interval:            time.Duration(conf.RefreshInterval),
+			RefreshF:            r.refresh,
+			MetricsInstantiator: m.refreshMetrics,
 		},
 	), nil
 }

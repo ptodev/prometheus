@@ -128,8 +128,14 @@ func TestConfiguredService(t *testing.T) {
 	conf := &SDConfig{
 		Server: "http://localhost:4646",
 	}
-	_, err := NewDiscovery(conf, nil, prometheus.NewRegistry())
+
+	metrics := conf.NewDiscovererDebugMetrics(prometheus.NewRegistry())
+	require.NoError(t, metrics.Register())
+
+	_, err := NewDiscovery(conf, nil, metrics)
 	require.NoError(t, err)
+
+	metrics.Unregister()
 }
 
 func TestNomadSDRefresh(t *testing.T) {
@@ -142,7 +148,12 @@ func TestNomadSDRefresh(t *testing.T) {
 
 	cfg := DefaultSDConfig
 	cfg.Server = endpoint.String()
-	d, err := NewDiscovery(&cfg, log.NewNopLogger(), prometheus.NewRegistry())
+
+	metrics := cfg.NewDiscovererDebugMetrics(prometheus.NewRegistry())
+	require.NoError(t, metrics.Register())
+	defer metrics.Unregister()
+
+	d, err := NewDiscovery(&cfg, log.NewNopLogger(), metrics)
 	require.NoError(t, err)
 
 	tgs, err := d.refresh(context.Background())

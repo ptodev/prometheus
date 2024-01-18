@@ -58,8 +58,8 @@ type SDConfig struct {
 }
 
 // NewDiscovererDebugMetrics implements discovery.Config.
-func (*SDConfig) NewDiscovererDebugMetrics(reg prometheus.Registerer) discovery.DiscovererDebugMetrics {
-	return newDiscovererDebugMetrics(reg)
+func (*SDConfig) NewDiscovererDebugMetrics(reg prometheus.Registerer, rdmm discovery.RefreshDebugMetricsInstantiator) discovery.DiscovererDebugMetrics {
+	return newDiscovererDebugMetrics(reg, rdmm)
 }
 
 // Name returns the name of the Config.

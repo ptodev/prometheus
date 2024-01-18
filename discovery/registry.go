@@ -24,6 +24,7 @@ import (
 
 	"gopkg.in/yaml.v2"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
 )
 
@@ -257,4 +258,17 @@ func replaceYAMLTypeError(err error, oldTyp, newTyp reflect.Type) error {
 		}
 	}
 	return err
+}
+
+func RegisterSDMetrics(registerer prometheus.Registerer, rdmm discovery.RefreshDebugMetricsManager) (map[string]DiscovererDebugMetrics, error) {
+	metrics := make(map[string]DiscovererDebugMetrics)
+	for _, conf := range configNames {
+		currentSdMetrics := conf.NewDiscovererDebugMetrics(registerer, rdmm)
+		err := currentSdMetrics.Register()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create service discovery metrics")
+		}
+		metrics[conf.Name()] = currentSdMetrics
+	}
+	return metrics, nil
 }

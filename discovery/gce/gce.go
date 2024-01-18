@@ -82,12 +82,17 @@ type SDConfig struct {
 	TagSeparator    string         `yaml:"tag_separator,omitempty"`
 }
 
+// NewDiscovererDebugMetrics implements discovery.Config.
+func (*SDConfig) NewDiscovererDebugMetrics(reg prometheus.Registerer, rdmm discovery.RefreshDebugMetricsInstantiator) discovery.DiscovererDebugMetrics {
+	return newDiscovererDebugMetrics(reg, rdmm)
+}
+
 // Name returns the name of the Config.
 func (*SDConfig) Name() string { return "gce" }
 
 // NewDiscoverer returns a Discoverer for the Config.
 func (c *SDConfig) NewDiscoverer(opts discovery.DiscovererOptions) (discovery.Discoverer, error) {
-	return NewDiscovery(*c, opts.Logger, opts.Registerer)
+	return NewDiscovery(*c, opts.Logger, opts.DebugMetrics)
 }
 
 // UnmarshalYAML implements the yaml.Unmarshaler interface.
@@ -122,7 +127,12 @@ type Discovery struct {
 }
 
 // NewDiscovery returns a new Discovery which periodically refreshes its targets.
-func NewDiscovery(conf SDConfig, logger log.Logger, reg prometheus.Registerer) (*Discovery, error) {
+func NewDiscovery(conf SDConfig, logger log.Logger, metrics discovery.DiscovererDebugMetrics) (*Discovery, error) {
+	m, err := convertToGceMetrics(metrics)
+	if err != nil {
+		return nil, err
+	}
+
 	d := &Discovery{
 		project:      conf.Project,
 		zone:         conf.Zone,
@@ -130,7 +140,6 @@ func NewDiscovery(conf SDConfig, logger log.Logger, reg prometheus.Registerer) (
 		port:         conf.Port,
 		tagSeparator: conf.TagSeparator,
 	}
-	var err error
 	d.client, err = google.DefaultClient(context.Background(), compute.ComputeReadonlyScope)
 	if err != nil {
 		return nil, fmt.Errorf("error setting up communication with GCE service: %w", err)
@@ -143,11 +152,10 @@ func NewDiscovery(conf SDConfig, logger log.Logger, reg prometheus.Registerer) (
 
 	d.Discovery = refresh.NewDiscovery(
 		refresh.Options{
-			Logger:   logger,
-			Mech:     "gce",
-			Interval: time.Duration(conf.RefreshInterval),
-			RefreshF: d.refresh,
-			Registry: reg,
+			Logger:              logger,
+			Interval:            time.Duration(conf.RefreshInterval),
+			RefreshF:            d.refresh,
+			MetricsInstantiator: m.refreshMetrics,
 		},
 	)
 	return d, nil

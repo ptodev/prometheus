@@ -79,12 +79,17 @@ type SDConfig struct {
 	Port              int                     `yaml:"port"`
 }
 
+// NewDiscovererDebugMetrics implements discovery.Config.
+func (*SDConfig) NewDiscovererDebugMetrics(reg prometheus.Registerer, rdmm discovery.RefreshDebugMetricsInstantiator) discovery.DiscovererDebugMetrics {
+	return newDiscovererDebugMetrics(reg, rdmm)
+}
+
 // Name returns the name of the Config.
 func (*SDConfig) Name() string { return "puppetdb" }
 
 // NewDiscoverer returns a Discoverer for the Config.
 func (c *SDConfig) NewDiscoverer(opts discovery.DiscovererOptions) (discovery.Discoverer, error) {
-	return NewDiscovery(c, opts.Logger, opts.Registerer)
+	return NewDiscovery(c, opts.Logger, opts.DebugMetrics)
 }
 
 // SetDirectory joins any relative file paths with dir.
@@ -131,7 +136,12 @@ type Discovery struct {
 }
 
 // NewDiscovery returns a new PuppetDB discovery for the given config.
-func NewDiscovery(conf *SDConfig, logger log.Logger, reg prometheus.Registerer) (*Discovery, error) {
+func NewDiscovery(conf *SDConfig, logger log.Logger, metrics discovery.DiscovererDebugMetrics) (*Discovery, error) {
+	m, ok := metrics.(*puppetdbMetrics)
+	if !ok {
+		return nil, fmt.Errorf("invalid discovery metrics type")
+	}
+
 	if logger == nil {
 		logger = log.NewNopLogger()
 	}
@@ -158,11 +168,10 @@ func NewDiscovery(conf *SDConfig, logger log.Logger, reg prometheus.Registerer) 
 
 	d.Discovery = refresh.NewDiscovery(
 		refresh.Options{
-			Logger:   logger,
-			Mech:     "http",
-			Interval: time.Duration(conf.RefreshInterval),
-			RefreshF: d.refresh,
-			Registry: reg,
+			Logger:              logger,
+			Interval:            time.Duration(conf.RefreshInterval),
+			RefreshF:            d.refresh,
+			MetricsInstantiator: m.refreshMetrics,
 		},
 	)
 	return d, nil

@@ -42,7 +42,7 @@ type provider struct {
 }
 
 // NewManager is the Discovery Manager constructor.
-func NewManager(ctx context.Context, logger log.Logger, registerer prometheus.Registerer, options ...func(*Manager)) *Manager {
+func NewManager(ctx context.Context, logger log.Logger, registerer prometheus.Registerer, sdMetrics map[string]discovery.DiscovererDebugMetrics, options ...func(*Manager)) *Manager {
 	if logger == nil {
 		logger = log.NewNopLogger()
 	}
@@ -55,6 +55,7 @@ func NewManager(ctx context.Context, logger log.Logger, registerer prometheus.Re
 		updatert:       5 * time.Second,
 		triggerSend:    make(chan struct{}, 1),
 		registerer:     registerer,
+		sdMetrics:      sdMetrics,
 	}
 	for _, option := range options {
 		option(mgr)
@@ -67,16 +68,6 @@ func NewManager(ctx context.Context, logger log.Logger, registerer prometheus.Re
 	} else {
 		level.Error(logger).Log("msg", "Failed to create discovery manager metrics", "manager", mgr.name, "err", err)
 		return nil
-	}
-
-	for confName, conf := range configNames {
-		currentSdMetrics := conf.NewDiscovererDebugMetrics(registerer)
-		err := currentSdMetrics.Register()
-		if err != nil {
-			level.Error(logger).Log("msg", "Failed to create service discovery metrics", "err", err, "type", confName)
-			return nil
-		}
-		mgr.sdMetrics[conf.Name()] = currentSdMetrics
 	}
 
 	return mgr
@@ -127,12 +118,6 @@ func (m *Manager) Run() error {
 	go m.sender()
 	<-m.ctx.Done()
 	m.cancelDiscoverers()
-
-	//TODO: Wait for the discoverers to stop before unregistering their metrics.
-	for _, sdMetric := range m.sdMetrics {
-		sdMetric.Unregister()
-	}
-
 	return m.ctx.Err()
 }
 

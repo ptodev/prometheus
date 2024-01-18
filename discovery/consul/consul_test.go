@@ -29,6 +29,7 @@ import (
 	"go.uber.org/goleak"
 	"gopkg.in/yaml.v2"
 
+	"github.com/prometheus/prometheus/discovery"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
 )
 
@@ -40,7 +41,11 @@ func TestConfiguredService(t *testing.T) {
 	conf := &SDConfig{
 		Services: []string{"configuredServiceName"},
 	}
-	consulDiscovery, err := NewDiscovery(conf, nil, prometheus.NewRegistry())
+
+	metrics := conf.NewDiscovererDebugMetrics(prometheus.NewRegistry())
+	require.NoError(t, metrics.Register())
+
+	consulDiscovery, err := NewDiscovery(conf, nil, metrics)
 	if err != nil {
 		t.Errorf("Unexpected error when initializing discovery %v", err)
 	}
@@ -50,6 +55,8 @@ func TestConfiguredService(t *testing.T) {
 	if consulDiscovery.shouldWatch("nonConfiguredServiceName", []string{""}) {
 		t.Errorf("Expected service %s to not be watched", "nonConfiguredServiceName")
 	}
+
+	metrics.Unregister()
 }
 
 func TestConfiguredServiceWithTag(t *testing.T) {
@@ -57,7 +64,11 @@ func TestConfiguredServiceWithTag(t *testing.T) {
 		Services:    []string{"configuredServiceName"},
 		ServiceTags: []string{"http"},
 	}
-	consulDiscovery, err := NewDiscovery(conf, nil, prometheus.NewRegistry())
+
+	metrics := conf.NewDiscovererDebugMetrics(prometheus.NewRegistry())
+	require.NoError(t, metrics.Register())
+
+	consulDiscovery, err := NewDiscovery(conf, nil, metrics)
 	if err != nil {
 		t.Errorf("Unexpected error when initializing discovery %v", err)
 	}
@@ -73,6 +84,8 @@ func TestConfiguredServiceWithTag(t *testing.T) {
 	if consulDiscovery.shouldWatch("nonConfiguredServiceName", []string{"http"}) {
 		t.Errorf("Expected service %s to not be watched with tag %s", "nonConfiguredServiceName", "http")
 	}
+
+	metrics.Unregister()
 }
 
 func TestConfiguredServiceWithTags(t *testing.T) {
@@ -152,7 +165,10 @@ func TestConfiguredServiceWithTags(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		consulDiscovery, err := NewDiscovery(tc.conf, nil, prometheus.NewRegistry())
+		metrics := tc.conf.NewDiscovererDebugMetrics(prometheus.NewRegistry())
+		require.NoError(t, metrics.Register())
+
+		consulDiscovery, err := NewDiscovery(tc.conf, nil, metrics)
 		if err != nil {
 			t.Errorf("Unexpected error when initializing discovery %v", err)
 		}
@@ -161,18 +177,25 @@ func TestConfiguredServiceWithTags(t *testing.T) {
 			t.Errorf("Expected should watch? %t, got %t. Watched service and tags: %s %+v, input was %s %+v", tc.shouldWatch, ret, tc.conf.Services, tc.conf.ServiceTags, tc.serviceName, tc.serviceTags)
 		}
 
+		metrics.Unregister()
 	}
 }
 
 func TestNonConfiguredService(t *testing.T) {
 	conf := &SDConfig{}
-	consulDiscovery, err := NewDiscovery(conf, nil, prometheus.NewRegistry())
+
+	metrics := conf.NewDiscovererDebugMetrics(prometheus.NewRegistry())
+	require.NoError(t, metrics.Register())
+
+	consulDiscovery, err := NewDiscovery(conf, nil, metrics)
 	if err != nil {
 		t.Errorf("Unexpected error when initializing discovery %v", err)
 	}
 	if !consulDiscovery.shouldWatch("nonConfiguredServiceName", []string{""}) {
 		t.Errorf("Expected service %s to be watched", "nonConfiguredServiceName")
 	}
+
+	metrics.Unregister()
 }
 
 const (
@@ -261,11 +284,16 @@ func newServer(t *testing.T) (*httptest.Server, *SDConfig) {
 	return stub, config
 }
 
-func newDiscovery(t *testing.T, config *SDConfig) *Discovery {
+func newDiscovery(t *testing.T, config *SDConfig) (*Discovery, discovery.DiscovererDebugMetrics) {
 	logger := log.NewNopLogger()
-	d, err := NewDiscovery(config, logger, prometheus.NewRegistry())
+
+	metrics := config.NewDiscovererDebugMetrics(prometheus.NewRegistry())
+	require.NoError(t, metrics.Register())
+
+	d, err := NewDiscovery(config, logger, metrics)
 	require.NoError(t, err)
-	return d
+
+	return d, metrics
 }
 
 func checkOneTarget(t *testing.T, tg []*targetgroup.Group) {
@@ -284,7 +312,7 @@ func TestAllServices(t *testing.T) {
 	stub, config := newServer(t)
 	defer stub.Close()
 
-	d := newDiscovery(t, config)
+	d, m := newDiscovery(t, config)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan []*targetgroup.Group)
@@ -296,6 +324,7 @@ func TestAllServices(t *testing.T) {
 	checkOneTarget(t, <-ch)
 	cancel()
 	<-ch
+	m.Unregister()
 }
 
 // targetgroup with no targets is emitted if no services were discovered.
@@ -304,7 +333,7 @@ func TestNoTargets(t *testing.T) {
 	defer stub.Close()
 	config.ServiceTags = []string{"missing"}
 
-	d := newDiscovery(t, config)
+	d, m := newDiscovery(t, config)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan []*targetgroup.Group)
@@ -317,6 +346,7 @@ func TestNoTargets(t *testing.T) {
 	require.Empty(t, targets)
 	cancel()
 	<-ch
+	m.Unregister()
 }
 
 // Watch only the test service.
@@ -325,13 +355,14 @@ func TestOneService(t *testing.T) {
 	defer stub.Close()
 
 	config.Services = []string{"test"}
-	d := newDiscovery(t, config)
+	d, m := newDiscovery(t, config)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan []*targetgroup.Group)
 	go d.Run(ctx, ch)
 	checkOneTarget(t, <-ch)
 	cancel()
+	m.Unregister()
 }
 
 // Watch the test service with a specific tag and node-meta.
@@ -345,7 +376,7 @@ func TestAllOptions(t *testing.T) {
 	config.AllowStale = true
 	config.Token = "fake-token"
 
-	d := newDiscovery(t, config)
+	d, m := newDiscovery(t, config)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan []*targetgroup.Group)
@@ -356,6 +387,7 @@ func TestAllOptions(t *testing.T) {
 	checkOneTarget(t, <-ch)
 	cancel()
 	<-ch
+	m.Unregister()
 }
 
 func TestGetDatacenterShouldReturnError(t *testing.T) {
@@ -388,7 +420,7 @@ func TestGetDatacenterShouldReturnError(t *testing.T) {
 			RefreshInterval: model.Duration(1 * time.Second),
 		}
 		defer stub.Close()
-		d := newDiscovery(t, config)
+		d, m := newDiscovery(t, config)
 
 		// Should be empty if not initialized.
 		require.Equal(t, "", d.clientDatacenter)
@@ -399,6 +431,8 @@ func TestGetDatacenterShouldReturnError(t *testing.T) {
 		require.Equal(t, tc.errMessage, err.Error())
 		// Should still be empty.
 		require.Equal(t, "", d.clientDatacenter)
+
+		m.Unregister()
 	}
 }
 
