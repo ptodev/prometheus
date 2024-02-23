@@ -1076,7 +1076,7 @@ type EvalNodeHelper struct {
 	Out Vector
 
 	// Caches.
-	// DropMetricName and label_*.
+	// label_*.
 	Dmn map[uint64]labels.Labels
 	// funcHistogramQuantile for classic histograms.
 	signatureToMetricWithBuckets map[string]*metricWithBuckets
@@ -1099,21 +1099,6 @@ func (enh *EvalNodeHelper) resetBuilder(lbls labels.Labels) {
 	} else {
 		enh.lb.Reset(lbls)
 	}
-}
-
-// DropMetricName is a cached version of DropMetricName.
-func (enh *EvalNodeHelper) DropMetricName(l labels.Labels) labels.Labels {
-	if enh.Dmn == nil {
-		enh.Dmn = make(map[uint64]labels.Labels, len(enh.Out))
-	}
-	h := l.Hash()
-	ret, ok := enh.Dmn[h]
-	if ok {
-		return ret
-	}
-	ret = dropMetricName(l)
-	enh.Dmn[h] = ret
-	return ret
 }
 
 // rangeEval evaluates the given expressions, and then for each step calls
@@ -1467,6 +1452,7 @@ func (ev *evaluator) eval(expr parser.Expr) (parser.Value, annotations.Annotatio
 		// Reuse objects across steps to save memory allocations.
 		var floats []FPoint
 		var histograms []HPoint
+		var prevSS *Series
 		inMatrix := make(Matrix, 1)
 		inArgs[matrixArgIndex] = inMatrix
 		enh := &EvalNodeHelper{Out: make(Vector, 0, 1)}
@@ -1492,7 +1478,7 @@ func (ev *evaluator) eval(expr parser.Expr) (parser.Value, annotations.Annotatio
 			// vector functions, the only change needed is to drop the
 			// metric name in the output.
 			if e.Func.Name != "last_over_time" {
-				metric = dropMetricName(metric)
+				metric = metric.DropMetricName()
 			}
 			ss := Series{
 				Metric: metric,
@@ -1508,10 +1494,14 @@ func (ev *evaluator) eval(expr parser.Expr) (parser.Value, annotations.Annotatio
 						otherInArgs[j][0].F = otherArgs[j][0].Floats[step].F
 					}
 				}
-				maxt := ts - offset
-				mint := maxt - selRange
-				// Evaluate the matrix selector for this series for this step.
-				floats, histograms = ev.matrixIterSlice(it, mint, maxt, floats, histograms)
+				// Evaluate the matrix selector for this series
+				// for this step, but only if this is the 1st
+				// iteration or no @ modifier has been used.
+				if ts == ev.startTimestamp || selVS.Timestamp == nil {
+					maxt := ts - offset
+					mint := maxt - selRange
+					floats, histograms = ev.matrixIterSlice(it, mint, maxt, floats, histograms)
+				}
 				if len(floats)+len(histograms) == 0 {
 					continue
 				}
@@ -1527,12 +1517,13 @@ func (ev *evaluator) eval(expr parser.Expr) (parser.Value, annotations.Annotatio
 				if len(outVec) > 0 {
 					if outVec[0].H == nil {
 						if ss.Floats == nil {
-							ss.Floats = getFPointSlice(numSteps)
+							ss.Floats = reuseOrGetFPointSlices(prevSS, numSteps)
 						}
+
 						ss.Floats = append(ss.Floats, FPoint{F: outVec[0].F, T: ts})
 					} else {
 						if ss.Histograms == nil {
-							ss.Histograms = getHPointSlice(numSteps)
+							ss.Histograms = reuseOrGetHPointSlices(prevSS, numSteps)
 						}
 						ss.Histograms = append(ss.Histograms, HPoint{H: outVec[0].H, T: ts})
 					}
@@ -1541,9 +1532,11 @@ func (ev *evaluator) eval(expr parser.Expr) (parser.Value, annotations.Annotatio
 				it.ReduceDelta(stepRange)
 			}
 			histSamples := totalHPointSize(ss.Histograms)
+
 			if len(ss.Floats)+histSamples > 0 {
 				if ev.currentSamples+len(ss.Floats)+histSamples <= ev.maxSamples {
 					mat = append(mat, ss)
+					prevSS = &mat[len(mat)-1]
 					ev.currentSamples += len(ss.Floats) + histSamples
 				} else {
 					ev.error(ErrTooManySamples(env))
@@ -1624,7 +1617,7 @@ func (ev *evaluator) eval(expr parser.Expr) (parser.Value, annotations.Annotatio
 		mat := val.(Matrix)
 		if e.Op == parser.SUB {
 			for i := range mat {
-				mat[i].Metric = dropMetricName(mat[i].Metric)
+				mat[i].Metric = mat[i].Metric.DropMetricName()
 				for j := range mat[i].Floats {
 					mat[i].Floats[j].F = -mat[i].Floats[j].F
 				}
@@ -1693,6 +1686,7 @@ func (ev *evaluator) eval(expr parser.Expr) (parser.Value, annotations.Annotatio
 			ev.error(errWithWarnings{fmt.Errorf("expanding series: %w", err), ws})
 		}
 		mat := make(Matrix, 0, len(e.Series))
+		var prevSS *Series
 		it := storage.NewMemoizedEmptyIterator(durationMilliseconds(ev.lookbackDelta))
 		var chkIter chunkenc.Iterator
 		for i, s := range e.Series {
@@ -1712,14 +1706,14 @@ func (ev *evaluator) eval(expr parser.Expr) (parser.Value, annotations.Annotatio
 					if ev.currentSamples < ev.maxSamples {
 						if h == nil {
 							if ss.Floats == nil {
-								ss.Floats = getFPointSlice(numSteps)
+								ss.Floats = reuseOrGetFPointSlices(prevSS, numSteps)
 							}
 							ss.Floats = append(ss.Floats, FPoint{F: f, T: ts})
 							ev.currentSamples++
 							ev.samplesStats.IncrementSamplesAtStep(step, 1)
 						} else {
 							if ss.Histograms == nil {
-								ss.Histograms = getHPointSlice(numSteps)
+								ss.Histograms = reuseOrGetHPointSlices(prevSS, numSteps)
 							}
 							point := HPoint{H: h, T: ts}
 							ss.Histograms = append(ss.Histograms, point)
@@ -1735,6 +1729,7 @@ func (ev *evaluator) eval(expr parser.Expr) (parser.Value, annotations.Annotatio
 
 			if len(ss.Floats)+len(ss.Histograms) > 0 {
 				mat = append(mat, ss)
+				prevSS = &mat[len(mat)-1]
 			}
 		}
 		ev.samplesStats.UpdatePeak(ev.currentSamples)
@@ -1853,6 +1848,30 @@ func (ev *evaluator) eval(expr parser.Expr) (parser.Value, annotations.Annotatio
 	}
 
 	panic(fmt.Errorf("unhandled expression of type: %T", expr))
+}
+
+// reuseOrGetFPointSlices reuses the space from previous slice to create new slice if the former has lots of room.
+// The previous slices capacity is adjusted so when it is re-used from the pool it doesn't overflow into the new one.
+func reuseOrGetHPointSlices(prevSS *Series, numSteps int) (r []HPoint) {
+	if prevSS != nil && cap(prevSS.Histograms)-2*len(prevSS.Histograms) > 0 {
+		r = prevSS.Histograms[len(prevSS.Histograms):]
+		prevSS.Histograms = prevSS.Histograms[0:len(prevSS.Histograms):len(prevSS.Histograms)]
+		return
+	}
+
+	return getHPointSlice(numSteps)
+}
+
+// reuseOrGetFPointSlices reuses the space from previous slice to create new slice if the former has lots of room.
+// The previous slices capacity is adjusted so when it is re-used from the pool it doesn't overflow into the new one.
+func reuseOrGetFPointSlices(prevSS *Series, numSteps int) (r []FPoint) {
+	if prevSS != nil && cap(prevSS.Floats)-2*len(prevSS.Floats) > 0 {
+		r = prevSS.Floats[len(prevSS.Floats):]
+		prevSS.Floats = prevSS.Floats[0:len(prevSS.Floats):len(prevSS.Floats)]
+		return
+	}
+
+	return getFPointSlice(numSteps)
 }
 
 func (ev *evaluator) rangeEvalTimestampFunctionOverVectorSelector(vs *parser.VectorSelector, call FunctionCall, e *parser.Call) (parser.Value, annotations.Annotations) {
@@ -2370,7 +2389,7 @@ func (ev *evaluator) VectorBinop(op parser.ItemType, lhs, rhs Vector, matching *
 		}
 		metric := resultMetric(ls.Metric, rs.Metric, op, matching, enh)
 		if returnBool {
-			metric = enh.DropMetricName(metric)
+			metric = metric.DropMetricName()
 		}
 		insertedSigs, exists := matchedSigs[sig]
 		if matching.Card == parser.CardOneToOne {
@@ -2492,16 +2511,12 @@ func (ev *evaluator) VectorscalarBinop(op parser.ItemType, lhs Vector, rhs Scala
 			lhsSample.F = float
 			lhsSample.H = histogram
 			if shouldDropMetricName(op) || returnBool {
-				lhsSample.Metric = enh.DropMetricName(lhsSample.Metric)
+				lhsSample.Metric = lhsSample.Metric.DropMetricName()
 			}
 			enh.Out = append(enh.Out, lhsSample)
 		}
 	}
 	return enh.Out
-}
-
-func dropMetricName(l labels.Labels) labels.Labels {
-	return labels.NewBuilder(l).Del(labels.MetricName).Labels()
 }
 
 // scalarBinop evaluates a binary operation between two Scalars.
