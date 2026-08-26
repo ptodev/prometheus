@@ -1560,6 +1560,7 @@ func main() {
 
 				localStorage.Set(db, 0)
 				db.SetWriteNotified(remoteStorage)
+				remoteStorage.SetMetadataProvider(db.MetadataProvider())
 				close(dbOpen)
 				<-cancel
 				logger.Info("Agent WAL storage stopped")

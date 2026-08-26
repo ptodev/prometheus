@@ -404,6 +404,12 @@ func (m *queueManagerMetrics) unregister() {
 	}
 }
 
+// MetadataProvider looks up per-series metadata from an in-memory store such
+// as the TSDB head or the agent's series set.
+type MetadataProvider interface {
+	GetMetadata(ref chunks.HeadSeriesRef) *metadata.Metadata
+}
+
 // WriteClient defines an interface for sending a batch of samples to an
 // external timeseries database.
 type WriteClient interface {
@@ -461,6 +467,7 @@ type QueueManager struct {
 	metrics              *queueManagerMetrics
 	interner             *pool
 	highestRecvTimestamp *maxTimestamp
+	metadataProvider     MetadataProvider
 }
 
 // NewQueueManager builds a new QueueManager and starts a new
@@ -555,6 +562,25 @@ func NewQueueManager(
 	t.shards = t.newShards()
 
 	return t
+}
+
+// getMetadata returns metadata for the given series ref. When a
+// MetadataProvider is set it is used directly (the caller must NOT hold
+// seriesMtx). Otherwise seriesMetadata is consulted (the caller MUST hold
+// seriesMtx).
+func (t *QueueManager) getMetadata(ref chunks.HeadSeriesRef) *metadata.Metadata {
+	if t.metadataProvider != nil {
+		return t.metadataProvider.GetMetadata(ref)
+	}
+	return t.seriesMetadata[ref]
+}
+
+// SetMetadataProvider sets a provider for looking up per-series metadata
+// directly from an in-memory store (e.g. the TSDB head or the agent's series
+// set). When set, the QueueManager pulls metadata on demand instead of relying
+// on metadata WAL records via StoreMetadata.
+func (t *QueueManager) SetMetadataProvider(p MetadataProvider) {
+	t.metadataProvider = p
 }
 
 // AppendWatcherMetadata sends metadata to the remote storage. Metadata is sent in batches, but is not parallelized.
@@ -747,7 +773,7 @@ outer:
 		}
 		// TODO(cstyan): Handle or at least log an error if no metadata is found.
 		// See https://github.com/prometheus/prometheus/issues/14405
-		meta := t.seriesMetadata[s.Ref]
+		meta := t.getMetadata(s.Ref)
 		t.seriesMtx.Unlock()
 		// Start with a very small backoff. This should not be t.cfg.MinBackoff
 		// as it can happen without errors, and we want to pickup work after
@@ -809,7 +835,7 @@ outer:
 			t.seriesMtx.Unlock()
 			continue
 		}
-		meta := t.seriesMetadata[e.Ref]
+		meta := t.getMetadata(e.Ref)
 		t.seriesMtx.Unlock()
 		// This will only loop if the queues are being resharded.
 		backoff := t.cfg.MinBackoff
@@ -871,7 +897,7 @@ outer:
 			t.seriesMtx.Unlock()
 			continue
 		}
-		meta := t.seriesMetadata[h.Ref]
+		meta := t.getMetadata(h.Ref)
 		t.seriesMtx.Unlock()
 
 		backoff := model.Duration(5 * time.Millisecond)
@@ -933,7 +959,7 @@ outer:
 			t.seriesMtx.Unlock()
 			continue
 		}
-		meta := t.seriesMetadata[h.Ref]
+		meta := t.getMetadata(h.Ref)
 		t.seriesMtx.Unlock()
 
 		backoff := model.Duration(5 * time.Millisecond)

@@ -78,6 +78,8 @@ type WriteStorage struct {
 	// For timestampTracker.
 	highestTimestamp        *maxTimestamp
 	enableTypeAndUnitLabels bool
+
+	metadataProvider MetadataProvider
 }
 
 // NewWriteStorage creates and runs a WriteStorage.
@@ -125,6 +127,18 @@ func (rws *WriteStorage) run() {
 		case <-rws.quit:
 			return
 		}
+	}
+}
+
+// SetMetadataProvider sets a provider for looking up per-series metadata
+// directly from an in-memory store. All existing and future QueueManagers
+// will use this provider instead of metadata WAL records.
+func (rws *WriteStorage) SetMetadataProvider(p MetadataProvider) {
+	rws.mtx.Lock()
+	defer rws.mtx.Unlock()
+	rws.metadataProvider = p
+	for _, q := range rws.queues {
+		q.SetMetadataProvider(p)
 	}
 }
 
@@ -221,6 +235,9 @@ func (rws *WriteStorage) ApplyConfig(conf *config.Config) error {
 			rwConf.ProtobufMessage,
 			rws.recordBuf,
 		)
+		if rws.metadataProvider != nil {
+			newQueues[hash].SetMetadataProvider(rws.metadataProvider)
+		}
 		// Keep track of which queues are new so we know which to start.
 		newHashes = append(newHashes, hash)
 	}
