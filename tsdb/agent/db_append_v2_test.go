@@ -31,6 +31,7 @@ import (
 	"github.com/prometheus/prometheus/model/exemplar"
 	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/metadata"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/storage/remote"
 	"github.com/prometheus/prometheus/tsdb"
@@ -1250,4 +1251,267 @@ func TestDB_EnableSTZeroInjection_AppendV2(t *testing.T) {
 			testutil.RequireEqualWithOptions(t, tc.expectedSamples, got, cmp.Options{cmp.AllowUnexported(walSample{})})
 		})
 	}
+}
+
+func TestMetadataStoredOnMemSeries_AppendV2(t *testing.T) {
+	s := createTestAgentDB(t, nil, DefaultOptions())
+	defer s.Close()
+
+	app := s.AppenderV2(context.Background())
+
+	lset := labels.FromStrings("__name__", "test_metric", "job", "test")
+	meta := metadata.Metadata{
+		Type: model.MetricTypeCounter,
+		Help: "A test counter",
+		Unit: "bytes",
+	}
+
+	ref, err := app.Append(0, lset, 0, 1, 1.0, nil, nil, storage.AOptions{
+		Metadata: meta,
+	})
+	require.NoError(t, err)
+	require.NoError(t, app.Commit())
+
+	got := s.series.GetMetadata(chunks.HeadSeriesRef(ref))
+	require.NotNil(t, got, "metadata should be stored on memSeries")
+	require.True(t, meta.Equals(*got))
+}
+
+func TestMetadataDeduplication_AppendV2(t *testing.T) {
+	s := createTestAgentDB(t, nil, DefaultOptions())
+	defer s.Close()
+
+	lset := labels.FromStrings("__name__", "test_metric", "job", "test")
+	meta := metadata.Metadata{
+		Type: model.MetricTypeGauge,
+		Help: "A test gauge",
+	}
+
+	app := s.AppenderV2(context.Background())
+	ref, err := app.Append(0, lset, 0, 1, 1.0, nil, nil, storage.AOptions{Metadata: meta})
+	require.NoError(t, err)
+	require.NoError(t, app.Commit())
+
+	series := s.series.GetByID(chunks.HeadSeriesRef(ref))
+	require.NotNil(t, series)
+	series.Lock()
+	firstMeta := series.meta
+	series.Unlock()
+
+	app = s.AppenderV2(context.Background())
+	_, err = app.Append(ref, lset, 0, 2, 2.0, nil, nil, storage.AOptions{Metadata: meta})
+	require.NoError(t, err)
+	require.NoError(t, app.Commit())
+
+	series.Lock()
+	secondMeta := series.meta
+	series.Unlock()
+
+	require.Same(t, firstMeta, secondMeta, "unchanged metadata should keep the same pointer")
+}
+
+func TestMetadataUpdate_AppendV2(t *testing.T) {
+	s := createTestAgentDB(t, nil, DefaultOptions())
+	defer s.Close()
+
+	lset := labels.FromStrings("__name__", "test_metric", "job", "test")
+	meta1 := metadata.Metadata{Type: model.MetricTypeCounter, Help: "Version 1"}
+	meta2 := metadata.Metadata{Type: model.MetricTypeCounter, Help: "Version 2"}
+
+	app := s.AppenderV2(context.Background())
+	ref, err := app.Append(0, lset, 0, 1, 1.0, nil, nil, storage.AOptions{Metadata: meta1})
+	require.NoError(t, err)
+	require.NoError(t, app.Commit())
+
+	got := s.series.GetMetadata(chunks.HeadSeriesRef(ref))
+	require.NotNil(t, got)
+	require.True(t, meta1.Equals(*got))
+
+	app = s.AppenderV2(context.Background())
+	_, err = app.Append(ref, lset, 0, 2, 2.0, nil, nil, storage.AOptions{Metadata: meta2})
+	require.NoError(t, err)
+	require.NoError(t, app.Commit())
+
+	got = s.series.GetMetadata(chunks.HeadSeriesRef(ref))
+	require.NotNil(t, got)
+	require.True(t, meta2.Equals(*got), "metadata should be updated")
+}
+
+func TestMetadataStringInterning_AppendV2(t *testing.T) {
+	s := createTestAgentDB(t, nil, DefaultOptions())
+	defer s.Close()
+
+	helpText := "Shared help text across series"
+	meta := metadata.Metadata{Type: model.MetricTypeCounter, Help: helpText}
+
+	lset1 := labels.FromStrings("__name__", "test_metric", "instance", "a")
+	lset2 := labels.FromStrings("__name__", "test_metric", "instance", "b")
+
+	app := s.AppenderV2(context.Background())
+	ref1, err := app.Append(0, lset1, 0, 1, 1.0, nil, nil, storage.AOptions{Metadata: meta})
+	require.NoError(t, err)
+	ref2, err := app.Append(0, lset2, 0, 1, 2.0, nil, nil, storage.AOptions{Metadata: meta})
+	require.NoError(t, err)
+	require.NoError(t, app.Commit())
+
+	s1 := s.series.GetByID(chunks.HeadSeriesRef(ref1))
+	s2 := s.series.GetByID(chunks.HeadSeriesRef(ref2))
+	require.NotNil(t, s1)
+	require.NotNil(t, s2)
+
+	s1.Lock()
+	help1 := s1.meta.Help
+	s1.Unlock()
+	s2.Lock()
+	help2 := s2.meta.Help
+	s2.Unlock()
+
+	require.Equal(t, helpText, help1)
+	require.Equal(t, helpText, help2)
+}
+
+func TestUpdateMetadata_V1Path(t *testing.T) {
+	s := createTestAgentDB(t, nil, DefaultOptions())
+	defer s.Close()
+
+	app := s.Appender(context.Background())
+
+	lset := labels.FromStrings("__name__", "test_metric", "job", "test")
+	ref, err := app.Append(0, lset, 1, 1.0)
+	require.NoError(t, err)
+
+	meta := metadata.Metadata{Type: model.MetricTypeCounter, Help: "A counter", Unit: "seconds"}
+	ref, err = app.UpdateMetadata(ref, lset, meta)
+	require.NoError(t, err)
+	require.NoError(t, app.Commit())
+
+	got := s.series.GetMetadata(chunks.HeadSeriesRef(ref))
+	require.NotNil(t, got, "metadata should be stored via UpdateMetadata")
+	require.True(t, meta.Equals(*got))
+}
+
+// BenchmarkAppendV2WithMetadata measures the overhead of metadata in the agent
+// appender. Run with:
+//
+//	go test ./tsdb/agent/... -run '^$' -bench BenchmarkAppendV2WithMetadata -benchmem -count 6
+func BenchmarkAppendV2WithMetadata(b *testing.B) {
+	const (
+		numSeries       = 1000
+		numFamilies     = 100
+		seriesPerFamily = numSeries / numFamilies
+	)
+
+	type seriesEntry struct {
+		lset labels.Labels
+		ref  storage.SeriesRef
+	}
+
+	metas := make([]metadata.Metadata, numFamilies)
+	for i := range metas {
+		metas[i] = metadata.Metadata{
+			Type: model.MetricTypeCounter,
+			Help: fmt.Sprintf("Help text for metric family %d which is a realistic length description of this counter", i),
+			Unit: "bytes",
+		}
+	}
+
+	setup := func(b *testing.B) (*DB, []seriesEntry) {
+		b.Helper()
+		s := createTestAgentDB(b, nil, DefaultOptions())
+
+		entries := make([]seriesEntry, numSeries)
+		app := s.AppenderV2(context.Background())
+		for i := range numSeries {
+			lset := labels.FromStrings(
+				"__name__", fmt.Sprintf("metric_%d", i/seriesPerFamily),
+				"instance", fmt.Sprintf("instance_%d", i%seriesPerFamily),
+			)
+			ref, err := app.Append(0, lset, 0, 1, float64(i), nil, nil, storage.AOptions{})
+			if err != nil {
+				b.Fatal(err)
+			}
+			entries[i] = seriesEntry{lset: lset, ref: ref}
+		}
+		if err := app.Commit(); err != nil {
+			b.Fatal(err)
+		}
+		return s, entries
+	}
+
+	b.Run("no_metadata", func(b *testing.B) {
+		s, entries := setup(b)
+		defer s.Close()
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := range b.N {
+			e := entries[i%numSeries]
+			app := s.AppenderV2(context.Background())
+			_, err := app.Append(e.ref, e.lset, 0, int64(i+2), float64(i), nil, nil, storage.AOptions{})
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err := app.Commit(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("metadata_unchanged", func(b *testing.B) {
+		s, entries := setup(b)
+		defer s.Close()
+
+		app := s.AppenderV2(context.Background())
+		for i, e := range entries {
+			_, err := app.Append(e.ref, e.lset, 0, int64(numSeries+i+2), float64(i), nil, nil, storage.AOptions{
+				Metadata: metas[i/seriesPerFamily],
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := app.Commit(); err != nil {
+			b.Fatal(err)
+		}
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := range b.N {
+			e := entries[i%numSeries]
+			app := s.AppenderV2(context.Background())
+			_, err := app.Append(e.ref, e.lset, 0, int64(2*numSeries+i+2), float64(i), nil, nil, storage.AOptions{
+				Metadata: metas[(i%numSeries)/seriesPerFamily],
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err := app.Commit(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("metadata_new", func(b *testing.B) {
+		s, entries := setup(b)
+		defer s.Close()
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := range b.N {
+			e := entries[i%numSeries]
+			app := s.AppenderV2(context.Background())
+			_, err := app.Append(e.ref, e.lset, 0, int64(i+2), float64(i), nil, nil, storage.AOptions{
+				Metadata: metadata.Metadata{
+					Type: model.MetricTypeCounter,
+					Help: fmt.Sprintf("New help v%d", i),
+				},
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err := app.Commit(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }

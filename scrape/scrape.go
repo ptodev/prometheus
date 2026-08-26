@@ -31,6 +31,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unique"
 	"unsafe"
 
 	"github.com/klauspost/compress/gzip"
@@ -1140,7 +1141,7 @@ func (c *scrapeCache) setType(mfName []byte, t model.MetricType) ([]byte, *metaE
 		c.metadata[string(mfName)] = e
 	}
 	if e.Type != t {
-		e.Type = t
+		e.Type = model.MetricType(unique.Make(string(t)).Value())
 		e.lastIterChange = c.iter
 	}
 	e.lastIter = c.iter
@@ -1157,7 +1158,7 @@ func (c *scrapeCache) setHelp(mfName, help []byte) ([]byte, *metaEntry) {
 		c.metadata[string(mfName)] = e
 	}
 	if e.Help != string(help) {
-		e.Help = string(help)
+		e.Help = unique.Make(string(help)).Value()
 		e.lastIterChange = c.iter
 	}
 	e.lastIter = c.iter
@@ -1174,7 +1175,7 @@ func (c *scrapeCache) setUnit(mfName, unit []byte) ([]byte, *metaEntry) {
 		c.metadata[string(mfName)] = e
 	}
 	if e.Unit != string(unit) {
-		e.Unit = string(unit)
+		e.Unit = unique.Make(string(unit)).Value()
 		e.lastIterChange = c.iter
 	}
 	e.lastIter = c.iter

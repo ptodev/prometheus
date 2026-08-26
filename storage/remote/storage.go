@@ -86,6 +86,14 @@ func (s *Storage) Notify() {
 	s.rws.Notify()
 }
 
+// SetMetadataProvider configures a provider for looking up per-series metadata
+// from an in-memory store. All QueueManagers will use it instead of metadata
+// WAL records.
+func (s *Storage) SetMetadataProvider(p MetadataProvider) {
+	s.rws.SetMetadataProvider(p)
+}
+
+
 // ApplyConfig updates the state as the new config requires.
 func (s *Storage) ApplyConfig(conf *config.Config) error {
 	s.mtx.Lock()

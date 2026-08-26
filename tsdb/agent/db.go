@@ -862,6 +862,13 @@ func (db *DB) Appender(context.Context) storage.Appender {
 	return db.appenderPool.Get().(storage.Appender)
 }
 
+// MetadataProvider returns a remote.MetadataProvider backed by the agent's
+// in-memory series set. QueueManagers can use it to look up per-series
+// metadata without relying on WAL metadata records.
+func (db *DB) MetadataProvider() remote.MetadataProvider {
+	return db.series
+}
+
 // Close implements the Storage interface.
 func (db *DB) Close() error {
 	db.mtx.Lock()
@@ -1091,9 +1098,25 @@ func (a *appender) AppendHistogram(ref storage.SeriesRef, l labels.Labels, t int
 	return storage.SeriesRef(series.ref), nil
 }
 
-func (*appender) UpdateMetadata(storage.SeriesRef, labels.Labels, metadata.Metadata) (storage.SeriesRef, error) {
-	// TODO: Wire metadata in the Agent's appender.
-	return 0, nil
+func (a *appender) UpdateMetadata(ref storage.SeriesRef, l labels.Labels, meta metadata.Metadata) (storage.SeriesRef, error) {
+	s := a.series.GetByID(chunks.HeadSeriesRef(ref))
+	if s == nil {
+		s = a.series.GetByHash(l.Hash(), l)
+		if s != nil {
+			ref = storage.SeriesRef(s.ref)
+		}
+	}
+	if s == nil {
+		return 0, nil
+	}
+
+	s.Lock()
+	metaChanged := s.meta == nil || !s.meta.Equals(meta)
+	if metaChanged {
+		s.meta = internMetadata(meta)
+	}
+	s.Unlock()
+	return ref, nil
 }
 
 func (a *appender) AppendHistogramSTZeroSample(ref storage.SeriesRef, l labels.Labels, t, st int64, h *histogram.Histogram, fh *histogram.FloatHistogram) (storage.SeriesRef, error) {

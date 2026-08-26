@@ -116,6 +116,15 @@ func (a *appenderV2) Append(ref storage.SeriesRef, ls labels.Labels, st, t int64
 		return storage.SeriesRef(s.ref), nil
 	}
 
+	if !opts.Metadata.IsEmpty() {
+		s.Lock()
+		metaChanged := s.meta == nil || !s.meta.Equals(opts.Metadata)
+		if metaChanged {
+			s.meta = internMetadata(opts.Metadata)
+		}
+		s.Unlock()
+	}
+
 	// Append exemplars if any and if storage was configured for it.
 	// TODO(bwplotka): Agent does not have equivalent of a.head.opts.EnableExemplarStorage && a.head.opts.MaxExemplars.Load() > 0 ?
 	if len(opts.Exemplars) > 0 {

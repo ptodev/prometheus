@@ -16,11 +16,27 @@ package agent
 import (
 	"iter"
 	"sync"
+	"unique"
+
+	"github.com/prometheus/common/model"
 
 	"github.com/prometheus/prometheus/model/exemplar"
 	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/metadata"
 	"github.com/prometheus/prometheus/tsdb/chunks"
 )
+
+// internMetadata returns a new Metadata with all string fields interned via
+// unique.Make. When the source already provides interned strings (e.g. the
+// scrape cache), this is a no-op map lookup. For other sources (OTLP, custom
+// collectors) it deduplicates identical strings across the process.
+func internMetadata(m metadata.Metadata) *metadata.Metadata {
+	return &metadata.Metadata{
+		Type: model.MetricType(unique.Make(string(m.Type)).Value()),
+		Unit: unique.Make(m.Unit).Value(),
+		Help: unique.Make(m.Help).Value(),
+	}
+}
 
 // memSeries is a chunkless version of tsdb.memSeries.
 type memSeries struct {
@@ -28,6 +44,7 @@ type memSeries struct {
 
 	ref  chunks.HeadSeriesRef
 	lset labels.Labels
+	meta *metadata.Metadata
 
 	// Last recorded timestamp. Used by Storage.gc to determine if a series is
 	// stale.
@@ -315,6 +332,21 @@ func (s *stripeSeries) SetLatestExemplar(ref chunks.HeadSeriesRef, exemplar *exe
 		s.exemplars[i][ref] = exemplar
 	}
 	s.locks[i].Unlock()
+}
+
+// GetMetadata returns the cached metadata for a series, or nil if not set.
+func (s *stripeSeries) GetMetadata(id chunks.HeadSeriesRef) *metadata.Metadata {
+	refLock := s.refLock(id)
+	s.locks[refLock].RLock()
+	series := s.series[refLock][id]
+	s.locks[refLock].RUnlock()
+	if series == nil {
+		return nil
+	}
+	series.Lock()
+	m := series.meta
+	series.Unlock()
+	return m
 }
 
 func (s *stripeSeries) hashLock(hash uint64) uint64 {
