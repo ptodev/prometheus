@@ -404,10 +404,20 @@ func (m *queueManagerMetrics) unregister() {
 	}
 }
 
+// MetadataEntry holds per-metric-family metadata for batch sending (RW v1).
+type MetadataEntry struct {
+	MetricFamily string
+	Type         metadata.Metadata // Only Type, Help, Unit are used.
+}
+
 // MetadataProvider looks up per-series metadata from an in-memory store such
 // as the TSDB head or the agent's series set.
 type MetadataProvider interface {
+	// GetMetadata returns metadata for a single series by ref.
 	GetMetadata(ref chunks.HeadSeriesRef) *metadata.Metadata
+	// ListMetadata returns deduplicated per-metric-family metadata for all
+	// active series. Used by the RW v1 metadata sending path.
+	ListMetadata() []MetadataEntry
 }
 
 // WriteClient defines an interface for sending a batch of samples to an

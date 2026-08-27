@@ -15,6 +15,7 @@ package agent
 
 import (
 	"iter"
+	"strings"
 	"sync"
 	"unique"
 
@@ -23,8 +24,39 @@ import (
 	"github.com/prometheus/prometheus/model/exemplar"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/model/metadata"
+	"github.com/prometheus/prometheus/storage/remote"
 	"github.com/prometheus/prometheus/tsdb/chunks"
 )
+
+// metricFamilyFromName derives the metric family name from the series __name__
+// and the metric type by stripping type-specific suffixes.
+func metricFamilyFromName(name string, typ model.MetricType) string {
+	switch typ {
+	case model.MetricTypeCounter:
+		if s, ok := strings.CutSuffix(name, "_total"); ok {
+			return s
+		}
+	case model.MetricTypeHistogram:
+		for _, suffix := range []string{"_bucket", "_sum", "_count"} {
+			if s, ok := strings.CutSuffix(name, suffix); ok {
+				return s
+			}
+		}
+	case model.MetricTypeGaugeHistogram:
+		for _, suffix := range []string{"_bucket", "_gsum", "_gcount"} {
+			if s, ok := strings.CutSuffix(name, suffix); ok {
+				return s
+			}
+		}
+	case model.MetricTypeSummary:
+		for _, suffix := range []string{"_sum", "_count"} {
+			if s, ok := strings.CutSuffix(name, suffix); ok {
+				return s
+			}
+		}
+	}
+	return name
+}
 
 // internMetadata returns a new Metadata with all string fields interned via
 // unique.Make. When the source already provides interned strings (e.g. the
@@ -42,9 +74,10 @@ func internMetadata(m metadata.Metadata) *metadata.Metadata {
 type memSeries struct {
 	sync.Mutex
 
-	ref  chunks.HeadSeriesRef
-	lset labels.Labels
-	meta *metadata.Metadata
+	ref              chunks.HeadSeriesRef
+	lset             labels.Labels
+	meta             *metadata.Metadata
+	metricFamilyName string
 
 	// Last recorded timestamp. Used by Storage.gc to determine if a series is
 	// stale.
@@ -347,6 +380,31 @@ func (s *stripeSeries) GetMetadata(id chunks.HeadSeriesRef) *metadata.Metadata {
 	m := series.meta
 	series.Unlock()
 	return m
+}
+
+// ListMetadata returns deduplicated per-metric-family metadata for all active
+// series. Used by the RW v1 metadata sending path.
+func (s *stripeSeries) ListMetadata() []remote.MetadataEntry {
+	seen := map[string]struct{}{}
+	var result []remote.MetadataEntry
+	for i := 0; i < s.size; i++ {
+		s.locks[i].RLock()
+		for _, series := range s.series[i] {
+			series.Lock()
+			if series.meta != nil && series.metricFamilyName != "" {
+				if _, ok := seen[series.metricFamilyName]; !ok {
+					seen[series.metricFamilyName] = struct{}{}
+					result = append(result, remote.MetadataEntry{
+						MetricFamily: series.metricFamilyName,
+						Type:         *series.meta,
+					})
+				}
+			}
+			series.Unlock()
+		}
+		s.locks[i].RUnlock()
+	}
+	return result
 }
 
 func (s *stripeSeries) hashLock(hash uint64) uint64 {

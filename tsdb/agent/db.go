@@ -1115,6 +1115,9 @@ func (a *appender) UpdateMetadata(ref storage.SeriesRef, l labels.Labels, meta m
 	if metaChanged {
 		s.meta = internMetadata(meta)
 	}
+	if s.metricFamilyName == "" {
+		s.metricFamilyName = metricFamilyFromName(l.Get(model.MetricNameLabel), meta.Type)
+	}
 	s.Unlock()
 	return ref, nil
 }

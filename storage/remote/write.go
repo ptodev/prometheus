@@ -30,6 +30,7 @@ import (
 	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/model/metadata"
+	"github.com/prometheus/prometheus/scrape"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb/record"
 	"github.com/prometheus/prometheus/tsdb/wlog"
@@ -120,13 +121,56 @@ func NewWriteStorage(logger *slog.Logger, reg prometheus.Registerer, dir string,
 func (rws *WriteStorage) run() {
 	ticker := time.NewTicker(shardUpdateDuration)
 	defer ticker.Stop()
+
+	metaTicker := time.NewTicker(1 * time.Minute)
+	defer metaTicker.Stop()
+
 	for {
 		select {
 		case <-ticker.C:
 			rws.samplesIn.tick()
+		case <-metaTicker.C:
+			rws.sendProviderMetadata()
 		case <-rws.quit:
 			return
 		}
+	}
+}
+
+// sendProviderMetadata collects metadata from the MetadataProvider and sends
+// it to any v1 QueueManagers via AppendWatcherMetadata.
+func (rws *WriteStorage) sendProviderMetadata() {
+	rws.mtx.Lock()
+	provider := rws.metadataProvider
+	rws.mtx.Unlock()
+	if provider == nil {
+		return
+	}
+
+	entries := provider.ListMetadata()
+	if len(entries) == 0 {
+		return
+	}
+
+	sm := make([]scrape.MetricMetadata, len(entries))
+	for i, e := range entries {
+		sm[i] = scrape.MetricMetadata{
+			MetricFamily: e.MetricFamily,
+			Type:         e.Type.Type,
+			Help:         e.Type.Help,
+			Unit:         e.Type.Unit,
+		}
+	}
+
+	rws.mtx.Lock()
+	queues := make([]*QueueManager, 0, len(rws.queues))
+	for _, q := range rws.queues {
+		queues = append(queues, q)
+	}
+	rws.mtx.Unlock()
+
+	for _, q := range queues {
+		q.AppendWatcherMetadata(context.Background(), sm)
 	}
 }
 

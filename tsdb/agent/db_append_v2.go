@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"unique"
 
 	"github.com/prometheus/prometheus/model/exemplar"
 	"github.com/prometheus/prometheus/model/histogram"
@@ -121,6 +122,9 @@ func (a *appenderV2) Append(ref storage.SeriesRef, ls labels.Labels, st, t int64
 		metaChanged := s.meta == nil || !s.meta.Equals(opts.Metadata)
 		if metaChanged {
 			s.meta = internMetadata(opts.Metadata)
+		}
+		if opts.MetricFamilyName != "" && s.metricFamilyName == "" {
+			s.metricFamilyName = unique.Make(opts.MetricFamilyName).Value()
 		}
 		s.Unlock()
 	}
