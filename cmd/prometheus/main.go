@@ -216,6 +216,7 @@ type flagConfig struct {
 	enablePerStepStats       bool
 	enableConcurrentRuleEval bool
 	useStartTimestamps       bool
+	enableMetadataInMemory   bool
 
 	prometheusURL   string
 	corsRegexString string
@@ -248,6 +249,11 @@ func (c *flagConfig) setFeatureListOptions(logger *slog.Logger) error {
 				c.web.AppendMetadata = true
 				features.Enable(features.TSDB, "metadata_wal_records")
 				logger.Info("Experimental metadata records in WAL enabled")
+			case "metadata-in-memory":
+				c.scrape.AppendMetadata = true
+				c.web.AppendMetadata = true
+				c.enableMetadataInMemory = true
+				logger.Info("Experimental in-memory metadata log enabled")
 			case "promql-per-step-stats":
 				c.enablePerStepStats = true
 				logger.Info("Experimental per-step statistics reporting")
@@ -636,7 +642,7 @@ func main() {
 	a.Flag("scrape.discovery-reload-interval", "Interval used by scrape manager to throttle target groups updates.").
 		Hidden().Default("5s").SetValue(&cfg.scrape.DiscoveryReloadInterval)
 
-	a.Flag("enable-feature", "Comma separated feature names to enable. Valid options: concurrent-rule-eval, created-timestamp-zero-ingestion, delayed-compaction, exemplar-storage, extra-scrape-metrics, memory-snapshot-on-shutdown, metadata-wal-records, old-ui, otlp-deltatocumulative, otlp-native-delta-ingestion, promql-binop-fill-modifiers, promql-delayed-name-removal, promql-duration-expr, promql-experimental-functions, promql-extended-range-selectors, promql-per-step-stats, search-api, st-storage, st-synthesis, type-and-unit-labels, use-start-timestamps, use-uncached-io, xor2-encoding. See https://prometheus.io/docs/prometheus/latest/feature_flags/ for more details.").
+	a.Flag("enable-feature", "Comma separated feature names to enable. Valid options: concurrent-rule-eval, created-timestamp-zero-ingestion, delayed-compaction, exemplar-storage, extra-scrape-metrics, memory-snapshot-on-shutdown, metadata-in-memory, metadata-wal-records, old-ui, otlp-deltatocumulative, otlp-native-delta-ingestion, promql-binop-fill-modifiers, promql-delayed-name-removal, promql-duration-expr, promql-experimental-functions, promql-extended-range-selectors, promql-per-step-stats, search-api, st-storage, st-synthesis, type-and-unit-labels, use-start-timestamps, use-uncached-io, xor2-encoding. See https://prometheus.io/docs/prometheus/latest/feature_flags/ for more details.").
 		StringsVar(&cfg.featureList)
 
 	a.Flag("agent", "Run Prometheus in 'Agent mode'.").BoolVar(&agentMode)
@@ -1501,6 +1507,9 @@ func main() {
 				startTimeMargin := int64(2 * time.Duration(cfg.tsdb.MinBlockDuration).Seconds() * 1000)
 				localStorage.Set(db, startTimeMargin)
 				db.SetWriteNotified(remoteStorage)
+				if cfg.enableMetadataInMemory {
+					remoteStorage.SetMetadataLog(db.Head().MetadataLog())
+				}
 				close(dbOpen)
 				<-cancel
 				logger.Info("TSDB stopped")
@@ -1560,6 +1569,9 @@ func main() {
 
 				localStorage.Set(db, 0)
 				db.SetWriteNotified(remoteStorage)
+				if cfg.enableMetadataInMemory {
+					remoteStorage.SetMetadataLog(db.MetadataLog())
+				}
 				close(dbOpen)
 				<-cancel
 				logger.Info("Agent WAL storage stopped")

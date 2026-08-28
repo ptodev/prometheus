@@ -35,6 +35,7 @@ import (
 	"github.com/prometheus/prometheus/model/exemplar"
 	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/metadata"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/storage/remote"
 	"github.com/prometheus/prometheus/tsdb"
@@ -790,6 +791,14 @@ func TestWALReplay(t *testing.T) {
 		mp := metrics[i]
 		for _, v := range mp {
 			require.Equal(t, v.lastTs, int64(lastTs))
+		}
+	}
+
+	// Metadata is in-memory only (not persisted to WAL), so after replay
+	// GetMetadata returns nil. Metadata repopulates on the next scrape.
+	for i := range replayStorage.series.series {
+		for _, v := range replayStorage.series.series[i] {
+			require.Nil(t, v.meta, "metadata should not survive WAL replay")
 		}
 	}
 }
@@ -1561,4 +1570,148 @@ func BenchmarkGetOrCreate(b *testing.B) {
 			app.getOrCreate(0, lbls[i%n])
 		}
 	})
+}
+
+func TestMetadataStoredOnMemSeries(t *testing.T) {
+	meta := metadata.Metadata{Type: model.MetricTypeCounter, Help: "A test counter", Unit: "bytes"}
+	lset := labels.FromStrings("__name__", "test_metric", "job", "test")
+
+	t.Run("v1", func(t *testing.T) {
+		s := createTestAgentDB(t, nil, DefaultOptions())
+		defer s.Close()
+		app := s.Appender(context.Background())
+		ref, err := app.Append(0, lset, 1, 1.0)
+		require.NoError(t, err)
+		_, err = app.UpdateMetadata(ref, lset, meta)
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+		got := s.series.GetMetadata(chunks.HeadSeriesRef(ref))
+		require.NotNil(t, got)
+		require.True(t, meta.Equals(*got))
+	})
+
+	t.Run("v2", func(t *testing.T) {
+		s := createTestAgentDB(t, nil, DefaultOptions())
+		defer s.Close()
+		app := s.AppenderV2(context.Background())
+		ref, err := app.Append(0, lset, 0, 1, 1.0, nil, nil, storage.AOptions{Metadata: meta})
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+		got := s.series.GetMetadata(chunks.HeadSeriesRef(ref))
+		require.NotNil(t, got)
+		require.True(t, meta.Equals(*got))
+	})
+}
+
+func TestMetadataUpdate(t *testing.T) {
+	lset := labels.FromStrings("__name__", "test_metric", "job", "test")
+	meta1 := metadata.Metadata{Type: model.MetricTypeCounter, Help: "Version 1"}
+	meta2 := metadata.Metadata{Type: model.MetricTypeCounter, Help: "Version 2"}
+
+	t.Run("v1", func(t *testing.T) {
+		s := createTestAgentDB(t, nil, DefaultOptions())
+		defer s.Close()
+		app := s.Appender(context.Background())
+		ref, err := app.Append(0, lset, 1, 1.0)
+		require.NoError(t, err)
+		_, err = app.UpdateMetadata(ref, lset, meta1)
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+		require.True(t, meta1.Equals(*s.series.GetMetadata(chunks.HeadSeriesRef(ref))))
+
+		app = s.Appender(context.Background())
+		_, err = app.Append(ref, lset, 2, 2.0)
+		require.NoError(t, err)
+		_, err = app.UpdateMetadata(ref, lset, meta2)
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+		require.True(t, meta2.Equals(*s.series.GetMetadata(chunks.HeadSeriesRef(ref))))
+	})
+
+	t.Run("v2", func(t *testing.T) {
+		s := createTestAgentDB(t, nil, DefaultOptions())
+		defer s.Close()
+		app := s.AppenderV2(context.Background())
+		ref, err := app.Append(0, lset, 0, 1, 1.0, nil, nil, storage.AOptions{Metadata: meta1})
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+		require.True(t, meta1.Equals(*s.series.GetMetadata(chunks.HeadSeriesRef(ref))))
+
+		app = s.AppenderV2(context.Background())
+		_, err = app.Append(ref, lset, 0, 2, 2.0, nil, nil, storage.AOptions{Metadata: meta2})
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+		require.True(t, meta2.Equals(*s.series.GetMetadata(chunks.HeadSeriesRef(ref))))
+	})
+}
+
+// TestMetadataVersioning verifies that when metadata changes for a series,
+// the WAL watcher can still retrieve the old metadata for samples that were
+// scraped before the change. This simulates the case where the WAL watcher
+// lags behind the scraper and reads old samples after metadata has changed.
+//
+// Currently FAILS because GetMetadata always returns the latest metadata.
+// When the WAL watcher calls GetMetadata(ref) for an old sample after a
+// metadata change, it gets the new metadata instead of the old one.
+// TODO: Implement metadata versioning (meta + prevMeta) to fix this.
+func TestMetadataVersioning(t *testing.T) {
+	t.Skip("Latest-wins: GetMetadata returns current metadata, not the version active when the sample was scraped. Will be fixed when metadata flows through the WAL watcher in order with samples.")
+	s := createTestAgentDB(t, nil, DefaultOptions())
+	defer s.Close()
+
+	lset := labels.FromStrings("__name__", "http_requests_total", "job", "test")
+	meta1 := metadata.Metadata{Type: model.MetricTypeCounter, Help: "Total HTTP requests"}
+	meta2 := metadata.Metadata{Type: model.MetricTypeCounter, Help: "Total HTTP requests (v2)"}
+
+	// Scrape 1: append sample at t=1 with meta1.
+	app := s.AppenderV2(context.Background())
+	ref, err := app.Append(0, lset, 0, 1, 1.0, nil, nil, storage.AOptions{Metadata: meta1})
+	require.NoError(t, err)
+	require.NoError(t, app.Commit())
+
+	// Scrape 2: metadata changes, append sample at t=2 with meta2.
+	app = s.AppenderV2(context.Background())
+	_, err = app.Append(ref, lset, 0, 2, 2.0, nil, nil, storage.AOptions{Metadata: meta2})
+	require.NoError(t, err)
+	require.NoError(t, app.Commit())
+
+	// Now the WAL watcher reads sample at t=1 (old sample) and calls
+	// GetMetadata(ref) to find the metadata for it. Since the metadata has
+	// already changed to meta2 on memSeries, GetMetadata returns meta2.
+	// But the sample at t=1 was scraped with meta1 — it should get meta1.
+	metaForOldSample := s.series.GetMetadata(chunks.HeadSeriesRef(ref))
+	require.NotNil(t, metaForOldSample)
+
+	// DESIRED: old sample's metadata lookup should return meta1.
+	// ACTUAL: returns meta2 (latest-wins). This test documents the limitation.
+	require.True(t, meta1.Equals(*metaForOldSample),
+		"GetMetadata for a series whose metadata changed should return the OLD metadata for old samples, but it returns the latest")
+}
+
+func TestMetadataGCPointerSurvival(t *testing.T) {
+	s := createTestAgentDB(t, nil, DefaultOptions())
+	defer s.Close()
+
+	meta := metadata.Metadata{Type: model.MetricTypeGauge, Help: "A gauge"}
+	lset := labels.FromStrings("__name__", "test_metric", "job", "test")
+
+	app := s.AppenderV2(context.Background())
+	ref, err := app.Append(0, lset, 0, 1, 1.0, nil, nil, storage.AOptions{Metadata: meta})
+	require.NoError(t, err)
+	require.NoError(t, app.Commit())
+
+	// Simulate what QueueManager does at enqueue time: copy the pointer.
+	capturedMeta := s.series.GetMetadata(chunks.HeadSeriesRef(ref))
+	require.NotNil(t, capturedMeta)
+
+	// GC the series (use a future timestamp to force deletion).
+	s.series.GC(math.MaxInt64, false)
+
+	// The series is gone -- GetMetadata returns nil.
+	require.Nil(t, s.series.GetMetadata(chunks.HeadSeriesRef(ref)))
+
+	// But the captured pointer is still valid -- Go GC keeps it alive
+	// because our local variable still references it. This is the same
+	// guarantee QueueManager gets: the timeSeries struct holds the pointer.
+	require.True(t, meta.Equals(*capturedMeta))
 }

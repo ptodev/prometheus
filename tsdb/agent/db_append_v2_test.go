@@ -31,6 +31,7 @@ import (
 	"github.com/prometheus/prometheus/model/exemplar"
 	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/metadata"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/storage/remote"
 	"github.com/prometheus/prometheus/tsdb"
@@ -1214,4 +1215,241 @@ func TestDB_EnableSTZeroInjection_AppendV2(t *testing.T) {
 			testutil.RequireEqualWithOptions(t, tc.expectedSamples, got, cmp.Options{cmp.AllowUnexported(walSample{})})
 		})
 	}
+}
+
+// BenchmarkAppendV2WithMetadata measures the overhead of metadata in the agent
+// appender. Run with:
+//
+//	go test ./tsdb/agent/... -run '^$' -bench BenchmarkAppendV2WithMetadata -benchmem -count 6
+func BenchmarkAppendV2WithMetadata(b *testing.B) {
+	const (
+		numSeries       = 1000
+		numFamilies     = 100
+		seriesPerFamily = numSeries / numFamilies
+	)
+
+	type seriesEntry struct {
+		lset labels.Labels
+		ref  storage.SeriesRef
+	}
+
+	metas := make([]metadata.Metadata, numFamilies)
+	for i := range metas {
+		metas[i] = metadata.Metadata{
+			Type: model.MetricTypeCounter,
+			Help: fmt.Sprintf("Help text for metric family %d which is a realistic length description of this counter", i),
+			Unit: "bytes",
+		}
+	}
+
+	setup := func(b *testing.B) (*DB, []seriesEntry) {
+		b.Helper()
+		s := createTestAgentDB(b, nil, DefaultOptions())
+
+		entries := make([]seriesEntry, numSeries)
+		app := s.AppenderV2(context.Background())
+		for i := range numSeries {
+			lset := labels.FromStrings(
+				"__name__", fmt.Sprintf("metric_%d", i/seriesPerFamily),
+				"instance", fmt.Sprintf("instance_%d", i%seriesPerFamily),
+			)
+			ref, err := app.Append(0, lset, 0, 1, float64(i), nil, nil, storage.AOptions{})
+			if err != nil {
+				b.Fatal(err)
+			}
+			entries[i] = seriesEntry{lset: lset, ref: ref}
+		}
+		if err := app.Commit(); err != nil {
+			b.Fatal(err)
+		}
+		return s, entries
+	}
+
+	b.Run("no_metadata", func(b *testing.B) {
+		s, entries := setup(b)
+		defer s.Close()
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := range b.N {
+			e := entries[i%numSeries]
+			app := s.AppenderV2(context.Background())
+			_, err := app.Append(e.ref, e.lset, 0, int64(i+2), float64(i), nil, nil, storage.AOptions{})
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err := app.Commit(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("metadata_unchanged", func(b *testing.B) {
+		s, entries := setup(b)
+		defer s.Close()
+
+		app := s.AppenderV2(context.Background())
+		for i, e := range entries {
+			_, err := app.Append(e.ref, e.lset, 0, int64(numSeries+i+2), float64(i), nil, nil, storage.AOptions{
+				Metadata: metas[i/seriesPerFamily],
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := app.Commit(); err != nil {
+			b.Fatal(err)
+		}
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := range b.N {
+			e := entries[i%numSeries]
+			app := s.AppenderV2(context.Background())
+			_, err := app.Append(e.ref, e.lset, 0, int64(2*numSeries+i+2), float64(i), nil, nil, storage.AOptions{
+				Metadata: metas[(i%numSeries)/seriesPerFamily],
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err := app.Commit(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("metadata_changed_every_1000", func(b *testing.B) {
+		s, entries := setup(b)
+		defer s.Close()
+
+		// Pre-populate with initial metadata.
+		app := s.AppenderV2(context.Background())
+		for i, e := range entries {
+			_, err := app.Append(e.ref, e.lset, 0, int64(numSeries+i+2), float64(i), nil, nil, storage.AOptions{
+				Metadata: metas[i/seriesPerFamily],
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := app.Commit(); err != nil {
+			b.Fatal(err)
+		}
+
+		// Pre-compute changed metadata to avoid fmt.Sprintf in the hot loop.
+		changedMetas := make([]metadata.Metadata, numFamilies)
+		for i := range changedMetas {
+			changedMetas[i] = metadata.Metadata{
+				Type: model.MetricTypeCounter,
+				Help: fmt.Sprintf("Updated help text for metric family %d after target restart", i),
+				Unit: "bytes",
+			}
+		}
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := range b.N {
+			e := entries[i%numSeries]
+			familyIdx := (i % numSeries) / seriesPerFamily
+			meta := metas[familyIdx]
+			if i%1000 == 0 {
+				meta = changedMetas[familyIdx]
+			}
+			app := s.AppenderV2(context.Background())
+			_, err := app.Append(e.ref, e.lset, 0, int64(2*numSeries+i+2), float64(i), nil, nil, storage.AOptions{
+				Metadata: meta,
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err := app.Commit(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("v1_no_metadata", func(b *testing.B) {
+		s, entries := setup(b)
+		defer s.Close()
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := range b.N {
+			e := entries[i%numSeries]
+			app := s.Appender(context.Background())
+			_, err := app.Append(e.ref, e.lset, int64(i+2), float64(i))
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err := app.Commit(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("v1_metadata_unchanged", func(b *testing.B) {
+		s, entries := setup(b)
+		defer s.Close()
+		// Pre-populate metadata via v1 path.
+		app := s.Appender(context.Background())
+		for i, e := range entries {
+			app.UpdateMetadata(e.ref, e.lset, metas[i/seriesPerFamily])
+		}
+		app.Commit()
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := range b.N {
+			e := entries[i%numSeries]
+			app := s.Appender(context.Background())
+			_, err := app.Append(e.ref, e.lset, int64(2*numSeries+i+2), float64(i))
+			if err != nil {
+				b.Fatal(err)
+			}
+			app.UpdateMetadata(e.ref, e.lset, metas[(i%numSeries)/seriesPerFamily])
+			if err := app.Commit(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("v1_metadata_changed_every_1000", func(b *testing.B) {
+		s, entries := setup(b)
+		defer s.Close()
+
+		// Pre-populate metadata.
+		app := s.Appender(context.Background())
+		for i, e := range entries {
+			app.UpdateMetadata(e.ref, e.lset, metas[i/seriesPerFamily])
+		}
+		app.Commit()
+
+		changedMetas := make([]metadata.Metadata, numFamilies)
+		for i := range changedMetas {
+			changedMetas[i] = metadata.Metadata{
+				Type: model.MetricTypeCounter,
+				Help: fmt.Sprintf("Updated help text for metric family %d after target restart", i),
+				Unit: "bytes",
+			}
+		}
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := range b.N {
+			e := entries[i%numSeries]
+			familyIdx := (i % numSeries) / seriesPerFamily
+			meta := metas[familyIdx]
+			if i%1000 == 0 {
+				meta = changedMetas[familyIdx]
+			}
+			app := s.Appender(context.Background())
+			_, err := app.Append(e.ref, e.lset, int64(2*numSeries+i+2), float64(i))
+			if err != nil {
+				b.Fatal(err)
+			}
+			app.UpdateMetadata(e.ref, e.lset, meta)
+			if err := app.Commit(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }

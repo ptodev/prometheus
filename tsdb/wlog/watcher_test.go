@@ -336,6 +336,148 @@ func TestWatcher_Tail(t *testing.T) {
 	}
 }
 
+// TestWatcher_MetadataLog verifies that metadata written to an in-memory
+// MetadataLog reaches the WriteTo consumer via StoreMetadata, alongside
+// samples written to the WAL. Also verifies metadata changes and OOO samples.
+func TestWatcher_MetadataLog(t *testing.T) {
+	const (
+		pageSize       = 32 * 1024
+		seriesPerBatch = 10
+	)
+
+	t.Run("metadata_and_changes", func(t *testing.T) {
+		var (
+			now  = time.Now()
+			dir  = t.TempDir()
+			wdir = path.Join(dir, "wal")
+			enc  = record.Encoder{}
+		)
+		require.NoError(t, os.Mkdir(wdir, 0o777))
+
+		tsFn := func(_, _ int) int64 {
+			return timestamp.FromTime(now.Add(1 * time.Second))
+		}
+		batch1 := testwal.GenerateRecords(testwal.RecordsCase{
+			Series:           seriesPerBatch,
+			SamplesPerSeries: 5,
+			TsFn:             tsFn,
+		})
+		// Batch 2 uses the same refs (same RefPadding=0) so metadata changes apply to same series.
+		batch2 := testwal.GenerateRecords(testwal.RecordsCase{
+			Series:           seriesPerBatch,
+			SamplesPerSeries: 5,
+			TsFn: func(_, _ int) int64 {
+				return timestamp.FromTime(now.Add(2 * time.Second))
+			},
+		})
+		// Change the help text for batch 2 metadata to simulate a metadata update.
+		for i := range batch2.Metadata {
+			batch2.Metadata[i].Help = fmt.Sprintf("updated help for %d", batch2.Metadata[i].Ref)
+		}
+
+		w, err := NewSize(nil, nil, wdir, 128*pageSize, compression.None)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, w.Close()) })
+
+		metadataLog := &MetadataLog{}
+		wt := newWriteToMock(0)
+		watcher := NewWatcher(wMetrics, nil, nil, "test", wt, dir, false, false, true, nil)
+		watcher.SetStartTime(now)
+		watcher.SetMetadataLog(metadataLog)
+		watcher.Start()
+		t.Cleanup(watcher.Stop)
+
+		// Batch 1: write series + samples to WAL, metadata to MetadataLog.
+		require.NoError(t, w.Log(enc.Series(batch1.Series, nil)))
+		require.NoError(t, w.Log(enc.Samples(batch1.Samples, nil)))
+		metadataLog.Append(batch1.Metadata)
+		watcher.Notify()
+
+		// Batch 2: more samples to WAL, changed metadata to MetadataLog.
+		require.NoError(t, w.Log(enc.Samples(batch2.Samples, nil)))
+		metadataLog.Append(batch2.Metadata)
+		watcher.Notify()
+
+		require.Eventually(t, func() bool {
+			wt.mu.Lock()
+			defer wt.mu.Unlock()
+			return wt.sampleAppends >= 2
+		}, 2*time.Minute, 100*time.Millisecond)
+
+		wt.mu.Lock()
+		defer wt.mu.Unlock()
+
+		// Verify samples arrived.
+		require.Equal(t, len(batch1.Samples)+len(batch2.Samples), len(wt.samplesAppended))
+
+		// Verify all metadata arrived (both batches).
+		require.GreaterOrEqual(t, len(wt.metadataStored), len(batch1.Metadata)+len(batch2.Metadata))
+
+		// Verify both original and updated metadata entries are present.
+		helpTexts := map[string]struct{}{}
+		for _, m := range wt.metadataStored {
+			helpTexts[m.Help] = struct{}{}
+		}
+		// Original help text from batch 1.
+		require.Contains(t, helpTexts, batch1.Metadata[0].Help)
+		// Updated help text from batch 2.
+		require.Contains(t, helpTexts, batch2.Metadata[0].Help)
+		require.Contains(t, batch2.Metadata[0].Help, "updated help")
+	})
+
+	t.Run("out_of_order_samples", func(t *testing.T) {
+		var (
+			now  = time.Now()
+			dir  = t.TempDir()
+			wdir = path.Join(dir, "wal")
+			enc  = record.Encoder{}
+		)
+		require.NoError(t, os.Mkdir(wdir, 0o777))
+
+		w, err := NewSize(nil, nil, wdir, 128*pageSize, compression.None)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, w.Close()) })
+
+		series := []record.RefSeries{{Ref: 1, Labels: labels.FromStrings("__name__", "ooo_metric")}}
+		meta := []record.RefMetadata{{Ref: 1, Type: uint8(record.Counter), Help: "OOO test metric"}}
+		// Samples with non-monotonic timestamps.
+		samples := []record.RefSample{
+			{Ref: 1, T: timestamp.FromTime(now.Add(3 * time.Second)), V: 100},
+			{Ref: 1, T: timestamp.FromTime(now.Add(1 * time.Second)), V: 50},
+			{Ref: 1, T: timestamp.FromTime(now.Add(4 * time.Second)), V: 200},
+			{Ref: 1, T: timestamp.FromTime(now.Add(2 * time.Second)), V: 150},
+		}
+
+		metadataLog := &MetadataLog{}
+		wt := newWriteToMock(0)
+		watcher := NewWatcher(wMetrics, nil, nil, "test", wt, dir, false, false, true, nil)
+		watcher.SetStartTime(now)
+		watcher.SetMetadataLog(metadataLog)
+		watcher.Start()
+		t.Cleanup(watcher.Stop)
+
+		require.NoError(t, w.Log(enc.Series(series, nil)))
+		require.NoError(t, w.Log(enc.Samples(samples, nil)))
+		metadataLog.Append(meta)
+		watcher.Notify()
+
+		require.Eventually(t, func() bool {
+			wt.mu.Lock()
+			defer wt.mu.Unlock()
+			return wt.sampleAppends >= 1
+		}, 2*time.Minute, 100*time.Millisecond)
+
+		wt.mu.Lock()
+		defer wt.mu.Unlock()
+
+		// All 4 samples should arrive (OOO is handled by QueueManager, not watcher).
+		require.Equal(t, 4, len(wt.samplesAppended))
+		// Metadata should arrive regardless of sample ordering.
+		require.GreaterOrEqual(t, len(wt.metadataStored), 1)
+		require.Equal(t, "OOO test metric", wt.metadataStored[0].Help)
+	})
+}
+
 func TestReadToEndNoCheckpoint(t *testing.T) {
 	pageSize := 32 * 1024
 	const seriesCount = 10

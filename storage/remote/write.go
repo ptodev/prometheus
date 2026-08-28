@@ -78,6 +78,8 @@ type WriteStorage struct {
 	// For timestampTracker.
 	highestTimestamp        *maxTimestamp
 	enableTypeAndUnitLabels bool
+
+	metadataLog *wlog.MetadataLog
 }
 
 // NewWriteStorage creates and runs a WriteStorage.
@@ -125,6 +127,18 @@ func (rws *WriteStorage) run() {
 		case <-rws.quit:
 			return
 		}
+	}
+}
+
+// SetMetadataLog sets an in-memory metadata log that the WAL watcher drains
+// alongside WAL records. All existing and future QueueManagers' watchers will
+// use this log.
+func (rws *WriteStorage) SetMetadataLog(l *wlog.MetadataLog) {
+	rws.mtx.Lock()
+	defer rws.mtx.Unlock()
+	rws.metadataLog = l
+	for _, q := range rws.queues {
+		q.watcher.SetMetadataLog(l)
 	}
 }
 
@@ -221,6 +235,9 @@ func (rws *WriteStorage) ApplyConfig(conf *config.Config) error {
 			rwConf.ProtobufMessage,
 			rws.recordBuf,
 		)
+		if rws.metadataLog != nil {
+			newQueues[hash].watcher.SetMetadataLog(rws.metadataLog)
+		}
 		// Keep track of which queues are new so we know which to start.
 		newHashes = append(newHashes, hash)
 	}

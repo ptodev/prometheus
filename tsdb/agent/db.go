@@ -283,6 +283,7 @@ type DB struct {
 	stopc chan struct{}
 
 	writeNotified wlog.WriteNotified
+	metadataLog   *wlog.MetadataLog
 
 	metrics *dbMetrics
 }
@@ -321,8 +322,9 @@ func Open(l *slog.Logger, reg prometheus.Registerer, rs *remote.Storage, dir str
 		series:  newStripeSeries(opts.StripeSize),
 		deleted: make(map[chunks.HeadSeriesRef]deletedRefMeta),
 
-		donec: make(chan struct{}),
-		stopc: make(chan struct{}),
+		donec:       make(chan struct{}),
+		stopc:       make(chan struct{}),
+		metadataLog: &wlog.MetadataLog{},
 
 		metrics: newDBMetrics(reg),
 	}
@@ -862,6 +864,13 @@ func (db *DB) Appender(context.Context) storage.Appender {
 	return db.appenderPool.Get().(storage.Appender)
 }
 
+// MetadataLog returns the in-memory metadata log. The WAL watcher drains
+// this log alongside WAL records, so metadata changes reach the QueueManager
+// in the same order as samples.
+func (db *DB) MetadataLog() *wlog.MetadataLog {
+	return db.metadataLog
+}
+
 // Close implements the Storage interface.
 func (db *DB) Close() error {
 	db.mtx.Lock()
@@ -1091,9 +1100,31 @@ func (a *appender) AppendHistogram(ref storage.SeriesRef, l labels.Labels, t int
 	return storage.SeriesRef(series.ref), nil
 }
 
-func (*appender) UpdateMetadata(storage.SeriesRef, labels.Labels, metadata.Metadata) (storage.SeriesRef, error) {
-	// TODO: Wire metadata in the Agent's appender.
-	return 0, nil
+func (a *appender) UpdateMetadata(ref storage.SeriesRef, l labels.Labels, meta metadata.Metadata) (storage.SeriesRef, error) {
+	s := a.series.GetByID(chunks.HeadSeriesRef(ref))
+	if s == nil {
+		s = a.series.GetByHash(l.Hash(), l)
+		if s != nil {
+			ref = storage.SeriesRef(s.ref)
+		}
+	}
+	if s == nil {
+		return 0, nil
+	}
+
+	s.Lock()
+	metaChanged := s.meta == nil || !s.meta.Equals(meta)
+	if metaChanged {
+		s.meta = internMetadata(meta)
+		a.metadataLog.Append([]record.RefMetadata{{
+			Ref:  s.ref,
+			Type: record.GetMetricType(meta.Type),
+			Unit: meta.Unit,
+			Help: meta.Help,
+		}})
+	}
+	s.Unlock()
+	return ref, nil
 }
 
 func (a *appender) AppendHistogramSTZeroSample(ref storage.SeriesRef, l labels.Labels, t, st int64, h *histogram.Histogram, fh *histogram.FloatHistogram) (storage.SeriesRef, error) {

@@ -147,6 +147,7 @@ type Head struct {
 	reg   prometheus.Registerer
 
 	writeNotified wlog.WriteNotified
+	metadataLog   *wlog.MetadataLog
 
 	memTruncationInProcess atomic.Bool
 	memTruncationCallBack  func() // For testing purposes.
@@ -315,6 +316,7 @@ func NewHead(r prometheus.Registerer, l *slog.Logger, wal, wbl *wlog.WL, opts *H
 		stats:           stats,
 		reg:             r,
 		seriesStateQuit: make(chan struct{}),
+		metadataLog:     &wlog.MetadataLog{},
 	}
 	if err := h.resetInMemoryState(); err != nil {
 		return nil, err
@@ -1864,6 +1866,12 @@ func (h *Head) compactable() bool {
 	}
 
 	return h.MaxTime()-h.MinTime() > h.chunkRange.Load()/2*3
+}
+
+// MetadataLog returns the in-memory metadata log. The WAL watcher drains
+// this log alongside WAL records.
+func (h *Head) MetadataLog() *wlog.MetadataLog {
+	return h.metadataLog
 }
 
 // Close flushes the WAL and closes the head.

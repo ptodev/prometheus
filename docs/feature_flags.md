@@ -147,6 +147,18 @@ Fall back to serving the old (Prometheus 2.x) web UI instead of the new UI. The 
 
 `--enable-feature=old-ui`
 
+## In-Memory Metadata Log
+
+`--enable-feature=metadata-in-memory`
+
+When enabled, Prometheus stores metadata in-memory on a per-series basis and
+propagates changes to remote write via an in-memory log. This avoids writing
+metadata to the WAL, reducing disk I/O. Metadata is not persisted across
+restarts; it repopulates from the next scrape.
+
+This is a more efficient alternative to `metadata-wal-records` for sending
+metadata with remote write 2.0. Both agent and server modes are supported.
+
 ## Metadata WAL Records
 
 `--enable-feature=metadata-wal-records`

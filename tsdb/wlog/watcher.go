@@ -100,6 +100,8 @@ type Watcher struct {
 	metrics        *WatcherMetrics
 	readerMetrics  *LiveReaderMetrics
 
+	metadataLog *MetadataLog
+
 	startTime      time.Time
 	startTimestamp int64 // the start time as a Prometheus timestamp
 	sendSamples    bool
@@ -227,6 +229,13 @@ func NewWatcher(
 
 		MaxSegment: -1,
 	}
+}
+
+// SetMetadataLog sets an in-memory metadata log for the watcher to drain
+// alongside WAL records. This provides metadata to the WriteTo consumer
+// without requiring metadata to be persisted in the WAL.
+func (w *Watcher) SetMetadataLog(l *MetadataLog) {
+	w.metadataLog = l
 }
 
 func (w *Watcher) Notify() {
@@ -529,6 +538,16 @@ func (w *Watcher) readSegment(r *LiveReader, segmentNum int, tail bool) error {
 	}()
 
 	dec := record.NewDecoder(labels.NewSymbolTable(), w.logger) // One table per WAL segment means it won't grow indefinitely.
+
+	// Drain the in-memory metadata log before processing WAL records.
+	// This ensures metadata changes from the appender are visible to the
+	// WriteTo consumer before the samples that follow them.
+	if w.metadataLog != nil {
+		if entries := w.metadataLog.Drain(); len(entries) > 0 {
+			w.writer.StoreMetadata(entries)
+		}
+	}
+
 	for r.Next() && !isClosed(w.quit) {
 		var err error
 		rec := r.Record()
@@ -649,7 +668,9 @@ func (w *Watcher) readSegment(r *LiveReader, segmentNum int, tail bool) error {
 			}
 
 		case record.Metadata:
-			if !w.sendMetadata {
+			// Skip WAL metadata records when using MetadataLog — the
+			// in-memory log is the sole metadata source.
+			if !w.sendMetadata || w.metadataLog != nil {
 				break
 			}
 			metadata, err = dec.Metadata(rec, metadata[:0])

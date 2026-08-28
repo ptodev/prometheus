@@ -31,6 +31,7 @@ import (
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/scrape"
 	"github.com/prometheus/prometheus/storage"
+	"github.com/prometheus/prometheus/tsdb/wlog"
 	"github.com/prometheus/prometheus/util/logging"
 )
 
@@ -84,6 +85,12 @@ func NewStorage(l *slog.Logger, reg prometheus.Registerer, stCallback startTimeC
 
 func (s *Storage) Notify() {
 	s.rws.Notify()
+}
+
+// SetMetadataLog configures an in-memory metadata log that the WAL watcher
+// drains alongside WAL records.
+func (s *Storage) SetMetadataLog(l *wlog.MetadataLog) {
+	s.rws.SetMetadataLog(l)
 }
 
 // ApplyConfig updates the state as the new config requires.
