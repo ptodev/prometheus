@@ -22,7 +22,9 @@ import (
 	"github.com/prometheus/common/model"
 	"github.com/stretchr/testify/require"
 
+	"github.com/prometheus/prometheus/model/metadata"
 	"github.com/prometheus/prometheus/scrape"
+	"github.com/prometheus/prometheus/storage"
 )
 
 var (
@@ -152,4 +154,32 @@ func TestWatchScrapeManager_ReadyForCollection(t *testing.T) {
 	mw.collect()
 
 	require.Equal(t, 2, wt.metadataAppended)
+}
+
+func TestWatchWithMetadataLister(t *testing.T) {
+	wt := newMetadataWriteToMock()
+
+	lister := &testMetadataLister{
+		entries: []storage.MetadataEntry{
+			{MetricFamily: "http_requests_total", Type: metadata.Metadata{Type: "counter", Help: "Total requests"}},
+			{MetricFamily: "process_cpu_seconds", Type: metadata.Metadata{Type: "gauge", Help: "CPU seconds"}},
+			{MetricFamily: "request_duration", Type: metadata.Metadata{Type: "histogram", Help: "Request duration", Unit: "seconds"}},
+		},
+	}
+
+	// Create watcher with nil scrape manager — metadata comes from the lister.
+	mw := NewMetadataWatcher(nil, nil, "", wt, interval, deadline)
+	mw.SetMetadataLister(lister)
+
+	mw.collect()
+
+	require.Equal(t, 3, wt.metadataAppended)
+}
+
+type testMetadataLister struct {
+	entries []storage.MetadataEntry
+}
+
+func (l *testMetadataLister) ListMetadata() []storage.MetadataEntry {
+	return l.entries
 }

@@ -45,6 +45,7 @@ import (
 	writev2 "github.com/prometheus/prometheus/prompb/io/prometheus/write/v2"
 	"github.com/prometheus/prometheus/schema"
 	"github.com/prometheus/prometheus/scrape"
+	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb/chunks"
 	"github.com/prometheus/prometheus/tsdb/record"
 	"github.com/prometheus/prometheus/tsdb/wlog"
@@ -1080,6 +1081,15 @@ func (t *QueueManager) SeriesReset(index int) {
 
 // SetClient updates the client used by a queue. Used when only client specific
 // fields are updated to avoid restarting the queue.
+// SetMetadataLister configures the MetadataWatcher to collect metadata from
+// a MetadataLister instead of polling scrape targets. This decouples metadata
+// from scraping, enabling systems like Grafana Alloy.
+func (t *QueueManager) SetMetadataLister(l storage.MetadataLister) {
+	if t.metadataWatcher != nil {
+		t.metadataWatcher.SetMetadataLister(l)
+	}
+}
+
 func (t *QueueManager) SetClient(c WriteClient) {
 	t.clientMtx.Lock()
 	t.storeClient = c

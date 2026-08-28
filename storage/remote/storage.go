@@ -86,6 +86,12 @@ func (s *Storage) Notify() {
 	s.rws.Notify()
 }
 
+// SetMetadataLister configures a MetadataLister for all QueueManagers'
+// MetadataWatchers. This decouples metadata collection from scraping.
+func (s *Storage) SetMetadataLister(l storage.MetadataLister) {
+	s.rws.SetMetadataLister(l)
+}
+
 // ApplyConfig updates the state as the new config requires.
 func (s *Storage) ApplyConfig(conf *config.Config) error {
 	s.mtx.Lock()

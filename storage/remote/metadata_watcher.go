@@ -23,6 +23,7 @@ import (
 	"github.com/prometheus/common/promslog"
 
 	"github.com/prometheus/prometheus/scrape"
+	"github.com/prometheus/prometheus/storage"
 )
 
 // MetadataAppender is an interface used by the Metadata Watcher to send metadata, It is read from the scrape manager, on to somewhere else.
@@ -46,9 +47,10 @@ type MetadataWatcher struct {
 	name   string
 	logger *slog.Logger
 
-	managerGetter ReadyScrapeManager
-	manager       Watchable
-	writer        MetadataAppender
+	managerGetter    ReadyScrapeManager
+	manager          Watchable
+	metadataLister   storage.MetadataLister
+	writer           MetadataAppender
 
 	interval model.Duration
 	deadline time.Duration
@@ -125,24 +127,48 @@ func (mw *MetadataWatcher) loop() {
 	}
 }
 
-func (mw *MetadataWatcher) collect() {
-	if !mw.ready() {
-		return
-	}
+// SetMetadataLister configures the watcher to collect metadata from a
+// MetadataLister instead of polling scrape targets. When set, the scrape
+// manager is not required. This decouples metadata collection from
+// scraping, enabling systems like Grafana Alloy where scrape and remote
+// write are independent components.
+func (mw *MetadataWatcher) SetMetadataLister(l storage.MetadataLister) {
+	mw.metadataLister = l
+}
 
-	// We create a set of the metadata to help deduplicating based on the attributes of a
-	// scrape.MetricMetadata. In this case, a combination of metric name, help, type, and unit.
-	metadataSet := map[scrape.MetricMetadata]struct{}{}
-	metadata := []scrape.MetricMetadata{}
-	for _, tset := range mw.manager.TargetsActive() {
-		for _, target := range tset {
-			for _, entry := range target.ListMetadata() {
-				if _, ok := metadataSet[entry]; !ok {
-					metadata = append(metadata, entry)
-					metadataSet[entry] = struct{}{}
+func (mw *MetadataWatcher) collect() {
+	var metadata []scrape.MetricMetadata
+
+	if mw.metadataLister != nil {
+		entries := mw.metadataLister.ListMetadata()
+		metadata = make([]scrape.MetricMetadata, len(entries))
+		for i, e := range entries {
+			metadata[i] = scrape.MetricMetadata{
+				MetricFamily: e.MetricFamily,
+				Type:         e.Type.Type,
+				Help:         e.Type.Help,
+				Unit:         e.Type.Unit,
+			}
+		}
+	} else {
+		if !mw.ready() {
+			return
+		}
+		metadataSet := map[scrape.MetricMetadata]struct{}{}
+		for _, tset := range mw.manager.TargetsActive() {
+			for _, target := range tset {
+				for _, entry := range target.ListMetadata() {
+					if _, ok := metadataSet[entry]; !ok {
+						metadata = append(metadata, entry)
+						metadataSet[entry] = struct{}{}
+					}
 				}
 			}
 		}
+	}
+
+	if len(metadata) == 0 {
+		return
 	}
 
 	// Blocks until the metadata is sent to the remote write endpoint or hardShutdownContext is expired.

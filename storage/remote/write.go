@@ -128,6 +128,17 @@ func (rws *WriteStorage) run() {
 	}
 }
 
+// SetMetadataLister configures all existing and future QueueManagers'
+// MetadataWatchers to collect metadata from a MetadataLister instead of
+// polling scrape targets. This decouples metadata from scraping.
+func (rws *WriteStorage) SetMetadataLister(l storage.MetadataLister) {
+	rws.mtx.Lock()
+	defer rws.mtx.Unlock()
+	for _, q := range rws.queues {
+		q.SetMetadataLister(l)
+	}
+}
+
 func (rws *WriteStorage) Notify() {
 	rws.mtx.Lock()
 	defer rws.mtx.Unlock()

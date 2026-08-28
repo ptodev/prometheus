@@ -511,6 +511,19 @@ type MetadataUpdater interface {
 	UpdateMetadata(ref SeriesRef, l labels.Labels, m metadata.Metadata) (SeriesRef, error)
 }
 
+// MetadataEntry holds per-metric-family metadata for batch collection.
+type MetadataEntry struct {
+	MetricFamily string
+	Type         metadata.Metadata
+}
+
+// MetadataLister provides batch metadata for all active series, grouped by
+// metric family. Used by the RW v1 MetadataWatcher to collect metadata without
+// depending on a scrape manager.
+type MetadataLister interface {
+	ListMetadata() []MetadataEntry
+}
+
 // StartTimestampAppender provides an interface for appending ST to storage.
 //
 // WARNING(bwplotka): Switch to AppendableV2 is in progress (https://github.com/prometheus/prometheus/issues/17632).
