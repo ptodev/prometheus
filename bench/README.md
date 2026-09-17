@@ -23,8 +23,7 @@ tests/
   <name>/
     test.yml             what's different about this one: label, flags
     prometheus.yml       the target's own config -- bench never writes to it
-avalanche_targets.json   gitignored, regenerated every run (fixed name, see below)
-runs/                 gitignored: each run's config, logs, profiles, Alloy config
+runs/                 gitignored: each run's config, logs, targets, and Alloy config
 ```
 
 Requires `avalanche` and `alloy` on `$PATH` alongside the binary under test
@@ -130,7 +129,7 @@ A test is a directory with two files:
   hold nothing but avalanche-driven series -- what's actually under test.
   It must declare, and bench checks for at startup:
   - a scrape job named `avalanche` with `file_sd_configs` pointed at
-    `avalanche_targets.json` (a fixed path bench regenerates every run --
+    `avalanche_targets.json` (generated beside the copied config for each run;
     see `tests/metadata/prometheus.yml` for the exact shape);
   - a `remote_write` pointed at `http://127.0.0.1:12346/api/v1/write` --
     Alloy's local, unauthenticated receiver, which forwards on to the real

@@ -96,7 +96,7 @@ func stopAvalanches(cmds []*exec.Cmd) {
 	}
 }
 
-func writeAvalancheTargets(av metricScrapeLoadConfig) error {
+func writeAvalancheTargets(runDir string, av metricScrapeLoadConfig) error {
 	ports := avalanchePorts(av)
 	n := av.targetCount()
 
@@ -111,5 +111,5 @@ func writeAvalancheTargets(av metricScrapeLoadConfig) error {
 	}
 	b.WriteByte(']')
 
-	return os.WriteFile(avalancheTargetsPath, b.Bytes(), 0o644)
+	return os.WriteFile(filepath.Join(runDir, avalancheTargetsPath), b.Bytes(), 0o644)
 }

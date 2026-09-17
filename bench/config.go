@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	testsDir  = "tests"
+	testsDir   = "tests"
 	commonPath = testsDir + "/common.yml"
 )
 
@@ -48,21 +48,21 @@ type metricScrapeLoadConfig struct {
 }
 
 type testConfig struct {
-	Label       string   `yaml:"label"`
-	ExtraArgs   []string `yaml:"extra_args"`
-	Bin         string   `yaml:"-"`
-	Duration    string   `yaml:"-"`
-	Avalanche   metricScrapeLoadConfig `yaml:"-"`
-	Agent       bool     `yaml:"-"`
-	Prometheus  endpoint `yaml:"-"`
-	Loki        endpoint `yaml:"-"`
-	Pyroscope   endpoint `yaml:"-"`
+	Label      string                 `yaml:"label"`
+	ExtraArgs  []string               `yaml:"extra_args"`
+	Bin        string                 `yaml:"-"`
+	Duration   string                 `yaml:"-"`
+	Avalanche  metricScrapeLoadConfig `yaml:"-"`
+	Agent      bool                   `yaml:"-"`
+	Prometheus endpoint               `yaml:"-"`
+	Loki       endpoint               `yaml:"-"`
+	Pyroscope  endpoint               `yaml:"-"`
 }
 
 func loadCommon() (common, error) {
 	c := common{
-		Subject: subjectConfig{Type: "prometheus"},
-		Gap:     "5m",
+		Subject:   subjectConfig{Type: "prometheus"},
+		Gap:       "5m",
 		Avalanche: metricScrapeLoadConfig{Timeout: "30s"},
 	}
 	if err := decodeYAML(commonPath, &c, true); err != nil {
@@ -75,8 +75,8 @@ func loadCommon() (common, error) {
 		return common{}, fmt.Errorf("%s: unsupported subject_under_test.type %q", commonPath, c.Subject.Type)
 	}
 	for name, value := range map[string]string{
-		"duration": c.Duration,
-		"gap": c.Gap,
+		"duration":                   c.Duration,
+		"gap":                        c.Gap,
 		"metric_scrape_load.timeout": c.Avalanche.Timeout,
 	} {
 		if _, err := time.ParseDuration(value); err != nil {
@@ -85,8 +85,8 @@ func loadCommon() (common, error) {
 	}
 	for name, e := range map[string]endpoint{
 		"prometheus": c.Monitoring.Prometheus,
-		"loki": c.Monitoring.Loki,
-		"pyroscope": c.Monitoring.Pyroscope,
+		"loki":       c.Monitoring.Loki,
+		"pyroscope":  c.Monitoring.Pyroscope,
 	} {
 		if e.URL == "" {
 			return common{}, fmt.Errorf("%s: monitoring.%s.url is required", commonPath, name)

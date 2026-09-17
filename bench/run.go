@@ -145,7 +145,7 @@ func runTest(ctx context.Context, testDir string, c common) error {
 		av.instanceCount(), seriesPerTarget, av.targetCount(), av.totalSeries(), av.ScrapeInterval)
 	fmt.Printf("estimated cost: %.0f samples/sec to ingest\n", av.samplesPerSecond())
 
-	if err := writeAvalancheTargets(av); err != nil {
+	if err := writeAvalancheTargets(runDir, av); err != nil {
 		return fmt.Errorf("writing the avalanche target list: %w", err)
 	}
 
@@ -320,7 +320,7 @@ func (s *discardSink) stop() {
 type targetProc struct {
 	cmd     *exec.Cmd
 	logPath string
-	done chan error
+	done    chan error
 }
 
 func stopTarget(tp *targetProc, grace time.Duration) error {
@@ -370,4 +370,3 @@ func waitReady(ctx context.Context, url string, timeout time.Duration) error {
 		}
 	}
 }
-
