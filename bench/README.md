@@ -9,8 +9,9 @@ machine's own metrics -- via an in-process node_exporter -- to Prometheus
 too. None of that ever needs a secret in a checked-in file.
 
 ```
-main.go               orchestration: runs a test end to end, starts and stops everything
-config.go             common.yml/test.yml shapes, loading, and prometheus.yml validation
+main.go               command entry point
+run.go                orchestration and process lifecycle
+config.go             configuration loading and validation
 metric_scrape_load.go avalanche: its config, process lifecycle, target list
 metamonitoring.go      Alloy: its config, process lifecycle
 alloy.alloy.tmpl       Alloy's config, as a template (embedded into metamonitoring.go)
@@ -56,7 +57,7 @@ All runs land in the same Grafana stack, tagged with each test's `label`.
 ### Setup the VM
 
 ```sh
-sudo apt-get update && sudo apt-get install -y git tmux
+sudo apt-get update && sudo apt-get install -y git tmux unzip
 GO=$(curl -s https://go.dev/VERSION?m=text | head -1)   # e.g. go1.25.1
 curl -LO "https://go.dev/dl/$GO.linux-amd64.tar.gz"
 sudo tar -C /usr/local -xzf "$GO.linux-amd64.tar.gz"
@@ -80,6 +81,19 @@ curl -LO "https://github.com/grafana/alloy/releases/download/${ALLOY_VERSION}/al
 unzip alloy-linux-amd64.zip && chmod +x alloy-linux-amd64
 mv alloy-linux-amd64 $HOME/go/bin/alloy
 
+# If you need a specific version rather than latest, grab that asset
+# directly instead of the two commands above. Check the VM's own
+# architecture first -- `uname -m` -- and match it: `x86_64` is amd64,
+# `aarch64` is arm64. Getting this wrong downloads fine but fails at run
+# time with "cannot execute binary file: Exec format error". Example for
+# v1.19.2 on amd64 (`uname -m` == x86_64):
+curl -LO https://github.com/grafana/alloy/releases/download/v1.19.2/alloy-linux-amd64.zip
+# or, with wget:
+wget https://github.com/grafana/alloy/releases/download/v1.19.2/alloy-linux-amd64.zip
+unzip alloy-linux-amd64.zip && chmod +x alloy-linux-amd64
+mv alloy-linux-amd64 $HOME/go/bin/alloy
+# -- swap amd64 for arm64 throughout if `uname -m` says aarch64 instead.
+
 git clone <this repo> prometheus && cd prometheus
 go build -o /tmp/prometheus ./cmd/prometheus   # the binary under test
 cd bench && cp tests/common.yml.example tests/common.yml
@@ -98,6 +112,12 @@ cd ~/prometheus/bench && go run .
 tmux attach -t bench                      # reconnect, any time, from anywhere
 ```
 
+### Cleaning up stray processes
+
+```sh
+pkill -f 'prometheus|avalanche|alloy'
+```
+
 ## Test options
 
 A test is a directory with two files:
@@ -105,8 +125,7 @@ A test is a directory with two files:
 - **`test.yml`** — what makes this test different: its label and any extra
   command-line flags. That's all: two fields.
 - **`prometheus.yml`** — the target's own config, checked in and run exactly
-  as written -- bench never parses or rewrites it (see `checkTargetConfig`
-  in `config.go`). No self-scrape: the target's own health is scraped by
+  as written. Bench validates but does not rewrite it. No self-scrape: the target's own health is scraped by
   Alloy instead (see Monitoring below), so the target's own head and WAL
   hold nothing but avalanche-driven series -- what's actually under test.
   It must declare, and bench checks for at startup:
