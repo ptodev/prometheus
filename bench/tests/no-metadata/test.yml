@@ -1,0 +1,7 @@
+# Baseline: metadata-wal-records off.
+label: no-metadata
+extra_args:
+  - --storage.tsdb.min-block-duration=10m
+  - --storage.tsdb.max-block-duration=10m
+  - --storage.tsdb.wal-compression
+  - --storage.tsdb.retention.time=30m

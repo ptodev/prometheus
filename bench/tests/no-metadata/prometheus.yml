@@ -1,0 +1,16 @@
+# The target-under-test's own config, checked in and run exactly as
+# written -- bench never rewrites it. Identical to the sibling test on
+# purpose: the only difference between these two tests is the
+# --enable-feature flag in test.yml.
+#
+# bench checks at startup that this declares the "avalanche" job and the
+# remote_write below -- see README.md's "Test options" section for what
+# they're for and why.
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: avalanche
+    file_sd_configs:
+      - files: ["avalanche_targets.json"]
+remote_write:
+  - url: http://127.0.0.1:12346/api/v1/write

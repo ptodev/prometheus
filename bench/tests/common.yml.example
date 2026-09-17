@@ -1,0 +1,63 @@
+# Settings shared by every test. Copy this to common.yml and fill in the
+# endpoints; common.yml is gitignored because it holds API keys.
+#
+# Every field below is optional except `subject_under_test.binary_path` and
+# the three `url`s. An explicit 0 is respected, so `active_series: 0` means
+# 0 rather than "use the default".
+
+# What is being benchmarked.
+subject_under_test:
+  # Supported values: "prometheus", "prometheus_agent".
+  # Future values: "alloy", "otel_collector".
+  type: prometheus
+  # Absolute path, or a name on $PATH.
+  binary_path: /tmp/prometheus
+
+duration: 60m
+
+# The load. active_series is the only field: how often avalanche is scraped
+# -- which sets both the ingest rate and avalanche's own render cost -- is
+# global.scrape_interval in each test's own prometheus.yml instead, since
+# that's the one place Prometheus itself is actually configured with it.
+metric_scrape_load:
+  # Total series to generate across all scrape targets.
+  active_series: 1000000
+
+# Where the data goes. user/api_key are Basic Auth and both optional -- leave
+# them out for an unauthenticated endpoint. For Grafana Cloud, user is the
+# numeric instance ID of that service (the three differ) and api_key an
+# access-policy token with write scope for it.
+#
+# Mind your tenant's active series limit: every test in a batch writes to the
+# same tenant, so the limit has to cover all of them at once, not one at a
+# time. Exceeding it returns 429s that drop samples silently from the run's
+# point of view.
+monitoring:
+  prometheus:
+    # The target remote_writes to Alloy's local receiver (see each test's own
+    # prometheus.yml), and Alloy forwards here with these credentials -- so
+    # they never need to be in a checked-in file.
+    #
+    # Set this to http://127.0.0.1:9099/receive and bench runs a built-in sink
+    # that reads every request and throws it away, reporting the request and
+    # byte counts at the end. That's how to run millions of active series: a
+    # hosted tenant's active-series limit would reject them (429), and pointing
+    # them at a local Prometheus just moves the memory problem next door. The
+    # cost on the target -- serialisation, compression, queueing -- is still
+    # real; what's missing is network latency and a real server's backpressure.
+    # Nothing reaches Grafana on a sink run, so the dashboard stays empty and
+    # the profiles in Pyroscope are the measurement.
+    url: https://prometheus-prod-NN-REGION.grafana.net/api/prom/push
+    user: "123456"
+    api_key: glc_...
+  loki:
+    # The full push path, not just the host.
+    url: https://logs-prod-REGION.grafana.net/loki/api/v1/push
+    user: "123456"
+    api_key: glc_...
+  pyroscope:
+    # Base URL only, no path -- and see README.md: this ingest path is verified
+    # against self-hosted Pyroscope, not Grafana Cloud Profiles.
+    url: https://profiles-prod-REGION.grafana.net
+    user: "123456"
+    api_key: glc_...

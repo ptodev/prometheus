@@ -1,0 +1,5 @@
+// Stops `go` commands run from here from walking up to the repo's own
+// go.work, which doesn't list this directory.
+go 1.26.0
+
+use .
