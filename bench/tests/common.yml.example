@@ -5,20 +5,19 @@ subject_under_test:
 duration: 60m
 
 metric_scrape_load:
-  active_series: 1000000
+  active_series: 5000000
 
 # user and api_key are optional Basic Auth credentials.
 monitoring:
   prometheus:
-    # Use http://127.0.0.1:9099/receive to discard remote-write data locally.
-    url: https://prometheus-prod-NN-REGION.grafana.net/api/prom/push
-    user: "123456"
-    api_key: glc_...
+    url: https://prometheus-prod-05-gb-south-0.grafana.net/api/prom/push
+    user: "627787"
+    api_key: 
   loki:
-    url: https://logs-prod-REGION.grafana.net/loki/api/v1/push
-    user: "123456"
-    api_key: glc_...
+    url: https://logs-prod-008.grafana.net/loki/api/v1/push
+    user: "312864"
+    api_key: 
   pyroscope:
-    url: https://profiles-prod-REGION.grafana.net
-    user: "123456"
-    api_key: glc_...
+    url: https://profiles-prod-014.grafana.net
+    user: "463507"
+    api_key: 
