@@ -17,7 +17,6 @@ const (
 )
 
 type subjectConfig struct {
-	Type       string `yaml:"type"`
 	BinaryPath string `yaml:"binary_path"`
 }
 
@@ -42,26 +41,17 @@ type monitoringConfig struct {
 }
 
 type metricScrapeLoadConfig struct {
-	ActiveSeries   int    `yaml:"active_series"`
-	ScrapeInterval string `yaml:"-"`
-	Timeout        string `yaml:"timeout"`
+	ActiveSeries int    `yaml:"active_series"`
+	Timeout      string `yaml:"timeout"`
 }
 
 type testConfig struct {
-	Label      string                 `yaml:"label"`
-	ExtraArgs  []string               `yaml:"extra_args"`
-	Bin        string                 `yaml:"-"`
-	Duration   string                 `yaml:"-"`
-	Avalanche  metricScrapeLoadConfig `yaml:"-"`
-	Agent      bool                   `yaml:"-"`
-	Prometheus endpoint               `yaml:"-"`
-	Loki       endpoint               `yaml:"-"`
-	Pyroscope  endpoint               `yaml:"-"`
+	Subject   subjectConfig `yaml:"subject_under_test"`
+	ExtraArgs []string      `yaml:"extra_args"`
 }
 
 func loadCommon() (common, error) {
 	c := common{
-		Subject:   subjectConfig{Type: "prometheus"},
 		Gap:       "5m",
 		Avalanche: metricScrapeLoadConfig{Timeout: "30s"},
 	}
@@ -70,9 +60,6 @@ func loadCommon() (common, error) {
 	}
 	if c.Subject.BinaryPath == "" {
 		return common{}, fmt.Errorf("%s: subject_under_test.binary_path is required", commonPath)
-	}
-	if c.Subject.Type != "prometheus" && c.Subject.Type != "prometheus_agent" {
-		return common{}, fmt.Errorf("%s: unsupported subject_under_test.type %q", commonPath, c.Subject.Type)
 	}
 	for name, value := range map[string]string{
 		"duration":                   c.Duration,
@@ -95,28 +82,19 @@ func loadCommon() (common, error) {
 	return c, nil
 }
 
-func loadTest(dir string, c common) (testConfig, string, error) {
+func loadTest(dir string) (testConfig, string, string, error) {
 	path := filepath.Join(dir, "test.yml")
-	var t testConfig
-	if err := decodeYAML(path, &t, true); err != nil {
-		return testConfig{}, "", err
+	var test testConfig
+	if err := decodeYAML(path, &test, true); err != nil {
+		return testConfig{}, "", "", err
 	}
-	if t.Label == "" {
-		t.Label = filepath.Base(dir)
-	}
-	t.Bin = c.Subject.BinaryPath
-	t.Duration = c.Duration
-	t.Agent = c.Subject.Type == "prometheus_agent"
-	t.Avalanche = c.Avalanche
-	t.Prometheus, t.Loki, t.Pyroscope = c.Monitoring.Prometheus, c.Monitoring.Loki, c.Monitoring.Pyroscope
 
 	configPath := filepath.Join(dir, "prometheus.yml")
 	interval, err := checkTargetConfig(configPath)
 	if err != nil {
-		return testConfig{}, "", err
+		return testConfig{}, "", "", err
 	}
-	t.Avalanche.ScrapeInterval = interval
-	return t, configPath, nil
+	return test, configPath, interval, nil
 }
 
 func decodeYAML(path string, dst any, strict bool) error {

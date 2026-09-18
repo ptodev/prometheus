@@ -29,7 +29,7 @@ type alloyConfigData struct {
 	Prometheus    endpoint
 }
 
-func writeAlloyConfig(runDir string, test testConfig, targetLogPath string) (string, error) {
+func writeAlloyConfig(runDir, label, targetLogPath string, monitoring monitoringConfig) (string, error) {
 	receiveHost, receivePort, err := net.SplitHostPort(alloyReceiveAddr)
 	if err != nil {
 		return "", err
@@ -37,14 +37,14 @@ func writeAlloyConfig(runDir string, test testConfig, targetLogPath string) (str
 
 	var b strings.Builder
 	err = alloyTmpl.Execute(&b, alloyConfigData{
-		Label:         test.Label,
+		Label:         label,
 		TargetAddr:    targetAddr,
 		TargetLogPath: targetLogPath,
 		ReceiveHost:   receiveHost,
 		ReceivePort:   receivePort,
-		Pyroscope:     test.Pyroscope,
-		Loki:          test.Loki,
-		Prometheus:    test.Prometheus,
+		Pyroscope:     monitoring.Pyroscope,
+		Loki:          monitoring.Loki,
+		Prometheus:    monitoring.Prometheus,
 	})
 	if err != nil {
 		return "", err

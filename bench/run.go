@@ -101,7 +101,7 @@ func discoverTests(dir string) ([]string, error) {
 	}
 	var found []string
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		p := filepath.Join(dir, e.Name())
@@ -116,22 +116,24 @@ func discoverTests(dir string) ([]string, error) {
 }
 
 func runTest(ctx context.Context, testDir string, c common) error {
-	test, cfgPath, err := loadTest(testDir, c)
+	test, cfgPath, scrapeInterval, err := loadTest(testDir)
 	if err != nil {
 		return err
 	}
-	duration, err := time.ParseDuration(test.Duration)
-	if err != nil {
-		return fmt.Errorf("%s: duration: %w", testDir, err)
-	}
-	avalancheTimeout, _ := time.ParseDuration(test.Avalanche.Timeout)
+	label := filepath.Base(testDir)
+	duration, _ := time.ParseDuration(c.Duration)
+	avalancheTimeout, _ := time.ParseDuration(c.Avalanche.Timeout)
 
-	binAbs, err := exec.LookPath(test.Bin)
+	binaryPath := test.Subject.BinaryPath
+	if binaryPath == "" {
+		binaryPath = c.Subject.BinaryPath
+	}
+	binAbs, err := exec.LookPath(binaryPath)
 	if err != nil {
-		return fmt.Errorf("%s: subject_under_test.binary_path %q: %w", testDir, test.Bin, err)
+		return fmt.Errorf("%s: subject_under_test.binary_path %q: %w", testDir, binaryPath, err)
 	}
 
-	runDir, err := filepath.Abs(filepath.Join("runs", test.Label))
+	runDir, err := filepath.Abs(filepath.Join("runs", label))
 	if err != nil {
 		return err
 	}
@@ -140,16 +142,16 @@ func runTest(ctx context.Context, testDir string, c common) error {
 	}
 	fmt.Printf("run directory: %s\n", runDir)
 
-	av := test.Avalanche
+	av := c.Avalanche
 	fmt.Printf("avalanche: %d instance(s) x %d series, %d targets = %d active series @ %s\n",
-		av.instanceCount(), seriesPerTarget, av.targetCount(), av.totalSeries(), av.ScrapeInterval)
-	fmt.Printf("estimated cost: %.0f samples/sec to ingest\n", av.samplesPerSecond())
+		av.instanceCount(), seriesPerTarget, av.targetCount(), av.totalSeries(), scrapeInterval)
+	fmt.Printf("estimated cost: %.0f samples/sec to ingest\n", av.samplesPerSecond(scrapeInterval))
 
 	if err := writeAvalancheTargets(runDir, av); err != nil {
 		return fmt.Errorf("writing the avalanche target list: %w", err)
 	}
 
-	sink, err := startDiscardSink(test.Prometheus.URL)
+	sink, err := startDiscardSink(c.Monitoring.Prometheus.URL)
 	if err != nil {
 		return err
 	}
@@ -171,7 +173,7 @@ func runTest(ctx context.Context, testDir string, c common) error {
 		}
 	}
 
-	target, err := startTarget(binAbs, runDir, cfgPath, test)
+	target, err := startTarget(binAbs, runDir, cfgPath, test.ExtraArgs)
 	if err != nil {
 		return fmt.Errorf("starting the target: %w", err)
 	}
@@ -182,7 +184,7 @@ func runTest(ctx context.Context, testDir string, c common) error {
 	}
 	fmt.Printf("target: ready, pid %d, log at %s\n", target.cmd.Process.Pid, target.logPath)
 
-	alloyCfgPath, err := writeAlloyConfig(runDir, test, target.logPath)
+	alloyCfgPath, err := writeAlloyConfig(runDir, label, target.logPath, c.Monitoring)
 	if err != nil {
 		return fmt.Errorf("writing alloy config: %w", err)
 	}
@@ -223,11 +225,11 @@ done. in Grafana:
   Loki:      {job="target", run=%[1]q}
   Pyroscope: service %[1]q (profile types process_cpu, memory)
   Host:      {job="host", test=%[1]q} for this machine's own metrics
-`, test.Label)
+`, label)
 	return nil
 }
 
-func startTarget(bin, runDir, cfgPath string, test testConfig) (*targetProc, error) {
+func startTarget(bin, runDir, cfgPath string, extraArgs []string) (*targetProc, error) {
 	cfgCopy := filepath.Join(runDir, "prometheus.yml")
 	orig, err := os.ReadFile(cfgPath)
 	if err != nil {
@@ -250,12 +252,8 @@ func startTarget(bin, runDir, cfgPath string, test testConfig) (*targetProc, err
 		"--web.listen-address=" + targetAddr,
 		"--log.format=logfmt",
 	}
-	if test.Agent {
-		args = append(args, "--agent", "--storage.agent.path="+dataDir)
-	} else {
-		args = append(args, "--storage.tsdb.path="+dataDir)
-	}
-	args = append(args, test.ExtraArgs...)
+	args = append(args, "--storage.tsdb.path="+dataDir)
+	args = append(args, extraArgs...)
 
 	logPath := filepath.Join(runDir, "target.log")
 	logF, err := os.Create(logPath)

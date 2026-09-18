@@ -27,8 +27,8 @@ func (a metricScrapeLoadConfig) totalSeries() int {
 	return seriesPerTarget * a.targetCount()
 }
 
-func (a metricScrapeLoadConfig) samplesPerSecond() float64 {
-	interval, err := time.ParseDuration(a.ScrapeInterval)
+func (a metricScrapeLoadConfig) samplesPerSecond(scrapeInterval string) float64 {
+	interval, err := time.ParseDuration(scrapeInterval)
 	if err != nil || interval <= 0 {
 		return 0
 	}

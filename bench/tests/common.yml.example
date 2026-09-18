@@ -1,7 +1,5 @@
 # Copy to common.yml and fill in the binary and monitoring endpoints.
 subject_under_test:
-  # prometheus or prometheus_agent
-  type: prometheus
   binary_path: /tmp/prometheus
 
 duration: 60m

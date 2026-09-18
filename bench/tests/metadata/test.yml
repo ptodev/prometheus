@@ -1,4 +1,3 @@
-label: metadata
 extra_args:
   - --enable-feature=metadata-wal-records
   - --storage.tsdb.min-block-duration=10m

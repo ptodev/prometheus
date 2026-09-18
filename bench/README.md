@@ -21,7 +21,7 @@ tests/
   common.yml.example  copy to common.yml and fill in your endpoints
   common.yml           gitignored: holds the API keys, the binary, the load
   <name>/
-    test.yml             what's different about this one: label, flags
+    test.yml             extra command-line flags for this test
     prometheus.yml       the target's own config -- bench never writes to it
 runs/                 gitignored: each run's config, logs, targets, and Alloy config
 ```
@@ -49,7 +49,9 @@ go run . tests/metadata                    # just this one
 go run . tests/metadata tests/no-metadata  # in this order
 ```
 
-All runs land in the same Grafana stack, tagged with each test's `label`.
+All runs are tagged with the test directory name. Directories beginning with
+`.` are skipped during automatic discovery, so rename
+a test to `.metadata` to disable it. An explicitly named directory still runs.
 
 ## Run it on a Debian VM
 
@@ -121,8 +123,7 @@ pkill -f 'prometheus|avalanche|alloy'
 
 A test is a directory with two files:
 
-- **`test.yml`** — what makes this test different: its label and any extra
-  command-line flags. That's all: two fields.
+- **`test.yml`** — the target binary and extra command-line flags.
 - **`prometheus.yml`** — the target's own config, checked in and run exactly
   as written. Bench validates but does not rewrite it. No self-scrape: the target's own health is scraped by
   Alloy instead (see Monitoring below), so the target's own head and WAL
@@ -142,16 +143,15 @@ A test is a directory with two files:
   from `common.yml`: it's the one place Prometheus is actually configured
   with the number, so it can't drift from what's really happening.
 
-Everything else — the binary under test, duration, load, monitoring
-endpoints — lives once in **`tests/common.yml`**. There's no per-test
-override: a `test.yml` that also sets one of those fields is a hard error
-(unknown field), not a silent merge. If a test genuinely needs a different
-value there, that's worth changing deliberately, not something to half-build
-an override system for speculatively.
+Duration, load, monitoring endpoints, and the default target binary live in
+**`tests/common.yml`**. A test can override `subject_under_test.binary_path`.
 
 Make a new test by copying a directory. `test.yml`:
 
 ```yaml
+subject_under_test:
+  binary_path: /tmp/prometheus-feature-build
+
 extra_args:   # extra command-line flags appended verbatim to the target binary
   - --enable-feature=some-flag
 ```
@@ -160,7 +160,6 @@ extra_args:   # extra command-line flags appended verbatim to the target binary
 
 ```yaml
 subject_under_test:
-  type: prometheus          # "prometheus" or "prometheus_agent"
   binary_path: /tmp/prometheus
 
 duration: 2h
@@ -183,8 +182,7 @@ monitoring:
 
 | Field | | |
 |---|---|---|
-| `type` | required | `prometheus` or `prometheus_agent` |
-| `binary_path` | required | absolute path or name on `$PATH` |
+| `binary_path` | required in `common.yml`, optional per test | absolute path or name on `$PATH` |
 
 **`metric_scrape_load`**
 
